@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<link rel="stylesheet" type="text/css" href="options.css">
+		
+		<script src="settings.js"></script>
+		<script src="ui.js"></script>
+		<script src="options.js"></script>
+		
+		<title>Options</title>
+	</head>
+	
+	<body id="editor" class="editorDefaultState">
+		
+		<fieldset id="toolbar">
+			
+			<button class="default" id="btnSave"></button>
+			
+			<a target="_blank" href="https://github.com/andre-st/chrome-injectjs">Visit Github</a>
+			
+		</fieldset>
+		
+		<fieldset>
+		
+<textarea id="scriptarea" spellcheck="false">
+// ============================================ Extension Config Script ================================================
+// Synposis:
+//
+//   mixin(  "https://www.url1.de",                   ()=&gt;{ ... },               { runAsContentScript: true });
+//   mixin([ "http://url1.com", "http://url2.com" ],  ` #selector { attr: "val" }`                              );
+//
+//   redir( /https:\/\/www\.url1\.de/,                "https://example.com" );
+//   redir( /(https:\/\/www\.url1\.de)/,              "$1?language=de"      );  // $1, $2, $3 (capture) group references
+//
+//
+//   Helpers inside Mixin code:                       Mixin-options required
+//   -----------------------------------------------  ------------------------------------------------------------------
+//   getUrl ( url: string, text =&gt; { ... })           { runAsContentScript: true }
+//   saveUrl( url: string                 )           { runAsContentScript: true }
+//   unxss  ( txt: string                 )
+//
+//
+// Examples and Helpers:
+//   - https://gist.github.com/search?q=user%3Aandre-st+%23injectjs
+//   - https://www.regextester.com/
+//
+// =====================================================================================================================
+
+
+</textarea>
+		
+		</fieldset>
+	</body>
+</html>
+

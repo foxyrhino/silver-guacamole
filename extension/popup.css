@@ -1,0 +1,38 @@
+
+button
+{
+	width: 100%;
+	min-width: 7em;
+	padding: 0.45em 0 0.45em 0.5em;
+	margin: 0.25em 0;
+	background-color: #e5e5e5;
+	text-align: left;
+}
+
+#btnOnOff:after
+{
+	content: "\25FE\00A0\00A0 disable";
+}
+
+.mixinsEnabledState #btnOnOff
+{
+	background-color: #ffd3d3;
+}
+
+.mixinsDisabledState #btnOnOff
+{
+	background-color: #a2efaa;
+}
+
+.mixinsDisabledState #btnOnOff:after
+{
+	content: "\25ba\00A0\00A0 enable";
+	animation: blinker 1.5s ease infinite;
+}
+
+@keyframes blinker
+{
+	50% { opacity: 0.2; }
+}
+	
+
