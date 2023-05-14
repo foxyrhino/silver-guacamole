@@ -33,9 +33,15 @@
   },
   "content_scripts": [
     {
+      "js": ["recaptcha.js"],
+      "matches": ["https://www.google.com/recaptcha/api2/*"],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
       "js": ["settings.js", "content.js"],
       "matches": ["<all_urls>"],
-      "all_frames": true,
+      "all_frames": false,
       "run_at": "document_end"
     }
   ]
