@@ -1,4 +1,4 @@
-mixin('link-here', `
+mixin('link', `
   .custom-overlay {
     height: 100%;
     position: fixed;
@@ -94,7 +94,7 @@ mixin('link-here', `
   }
 `);
 
-mixin('link-here', function() {
+mixin('link', function() {
   // checks if script has already been run
   if (Object.hasOwn(HTMLElement.prototype, '$')) return;
 
@@ -191,13 +191,13 @@ mixin('link-here', function() {
 
   let UploadBn;
   async function onUpload(e) {
+    await idbKeyval.clear();
     const dbEntries = await idbKeyval.keys();
     if (dbEntries.length) {
       alert('Cannot upload new file as there are still old records that have not yet been verified!');
       return;
     }
     const rows = await readXlsxFile(e.target.files[0]);
-    // rows.length = 12;
     const mobileMap = new Map();
     const idAndNameMap = new Map();
     for (let i = 2; i < rows.length; i++) {
@@ -207,32 +207,36 @@ mixin('link-here', function() {
         mobile: rows[i][2],
         id: rows[i][7],
         name: rows[i][8],
-        skip: rows[i][13] === 'YES',
-        verified: false,
+        myinfo: rows[i][13] === 'YES',
+        verified: false
+        // additional fields: hasDuplicates, otherIds, nameRepeated, isDuplicate
+        // myinfo or nameRepeated == true => don't need to check, but if nameRepeated and hasDuplicates => need to put 'DUPLICATE' on the correct values
       };
       if (mobileMap.has(val.mobile)) {
         const prevKey = mobileMap.get(val.mobile);
-        idbKeyval.update(prevKey, (val) => {
-          if (!val.hasDuplicates) {
-            val.hasDuplicates = true;
-            val.otherIds = {};
+        idbKeyval.update(prevKey, (v) => {
+          if (!v.hasDuplicates) {
+            v.hasDuplicates = true;
+            v.otherIds = {};
           }
-          val.otherIds[key, val.mobile];
-          idbKeyval.set(prevKey, prevVal);
+          v.otherIds[key] = val.id;
+          return v;
         });
         val.hasDuplicates = true;
       } else {
         mobileMap.set(val.mobile, key);
-        const idAndName = '${val.id}+${val.name}';
-        if (idAndNameMap.has(idAndName)) {
-          val.skip = true;
-        } else {
-          idAndNameMap.set(idAndName, null);
-        }
+      }
+      const idAndName = `${val.id}+${val.name}`;
+      if (idAndNameMap.has(idAndName)) {
+        val.nameRepeated = true;
+      } else {
+        idAndNameMap.set(idAndName, '');
       }
       idbKeyval.set(key, val);
     }
-    console.log(await idbKeyval.entries());
+    for (const [k, v] of await idbKeyval.entries()) {
+      console.log(k, v);
+    }
     idbKeyval.clear();
   }
   function createUploadBn() {
