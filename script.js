@@ -1,4 +1,4 @@
-mixin('https://prepaidreg.m1.com.sg/', `
+mixin('link-here', `
   .custom-overlay {
     height: 100%;
     position: fixed;
@@ -94,7 +94,7 @@ mixin('https://prepaidreg.m1.com.sg/', `
   }
 `);
 
-mixin('https://prepaidreg.m1.com.sg/', function() {
+mixin('link-here', function() {
   // checks if script has already been run
   if (Object.hasOwn(HTMLElement.prototype, '$')) return;
 
