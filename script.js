@@ -1,146 +1,28 @@
-mixin('link', `
-  .custom-overlay {
-    height: 100%;
-    position: fixed;
-    inset: 0;
-    padding: 16px;
-    background: rgba(0, 0, 0, .5);
-  }
-  .custom-dialog {
-    position: relative;
-    display: flex;
-    height: 100%;
-    border-radius: 12px;
-    background: #EEE;
-    overflow: hidden;
-  }
-  .btn-back {
-    position: absolute;
-    top: 16px;
-    left: 16px;
-    margin: 0;
-  }
-  .image-column {
-    flex: 2;
-    min-height: 100%;
-    display: flex;
-    flex-direction: column;
-    background: #BBB;
-    gap: 1px;
-  }
-  .image-column>.img-wrapper {
-    flex: 1;
-    background: #DDD;
-    overflow: hidden;
-  }
-  .image-column img {
-    height: 0;
-    min-height: 100%;
-    width: 100%;
-    object-fit: contain;
-    image-orientation: from-image;
-  }
-  .info-column {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    padding: 24px;
-  }
-  .info-row {
-    position: relative;
-    margin: 10px 0;
-  }
-  .info-row>b {
-    font-size: 14px;
-  }
-  .info-row>p {
-    margin: 2px 0;
-    font-size: 18px;
-    font-family: system-ui;
-  }
-  .info-row>.btn-wp-check {
-    position: absolute;
-    top: 6px;
-    left: 120px;
-    margin: 0;
-    padding: 0.5em 1em;
-  }
-  .dialog-footer {
-    display: flex;
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 76px;
-    padding: 16px;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-  .dialog-footer>button {
-    margin: 0;
-  }
-  .dialog-footer>button.btn-edit, .custom-dialog>.btn-back {
-    color: rgb(255, 158, 27);
-    background-color: #FFF;
-  }
-  .MuiSnackbar-root {
-    height: 112px;
-    background-color: transparent;
-    pointer-events: none;
-  }
-  .MuiSnackbar-root > .MuiPaper-root {
-    pointer-events: auto;
-  }
-`);
 
-mixin('link', function() {
+
+mixin('link', async () => {
   // checks if script has already been run
   if (Object.hasOwn(HTMLElement.prototype, '$')) return;
 
-  import(chrome.runtime.getURL('modules/idb-keyval.js'));
-  import(chrome.runtime.getURL('modules/read-excel-file.js'));
+  await import(chrome.runtime.getURL('modules/idb-keyval.js'));
 
   const $ = (q) => document.querySelector(q);
   Object.defineProperty(HTMLElement.prototype, '$', {
-    value: function(q) {
-      return this.querySelector(q)
-    }
+    value: function (q) { return this.querySelector(q) }
   });
-
   function createElem(q, t, a) {
     const e = document.createElement(q);
-    if (t) {
-      const c = document.createTextNode(t);
-      e.append(c);
-    }
-    if (a) {
-      for (const [k, v] of Object.entries(a)) {
-        e[k] = v;
-      }
-    }
+    if (t) e.append(document.createTextNode(t));
+    for (const [k, v] of Object.entries(a ?? 0)) e[k] = v;
     return e;
   }
-
   function observeMut(q, fn, attrs) {
     const o = new MutationObserver(fn);
-    o.observe($(q), attrs || {
-      childList: true
-    });
+    o.observe($(q), attrs ?? { childList: true });
   }
-
   function observeMutOnce(q, fn, attrs) {
-    const o = new MutationObserver((m, o) => {
-      fn(m, o);
-      o.disconnect();
-    });
-    o.observe($(q), attrs || {
-      childList: true
-    });
-  }
-
-  function createDB() {
-    // TODO: Save excel data into db
+    const o = new MutationObserver((m, o) => { fn(m, o); o.disconnect(); });
+    o.observe($(q), attrs ?? { childList: true });
   }
 
   let currentMobile, clipboardMobile;
@@ -153,6 +35,7 @@ mixin('link', function() {
   }
   getMobile();
   window.addEventListener('focus', getMobile);
+
   function inputNewMobile() {
     if (currentMobile === clipboardMobile) return;
     if (pageState !== 1) {
@@ -167,25 +50,20 @@ mixin('link', function() {
   }
 
   let pageState = 0;
-  const onPageChange = (mList) => {
-    const m = mList[0];
-    if (m.target.firstChild.classList.contains('MuiGrid-root')) {
+  const onPageChange = (c) => {
+    if (c.classList.contains('MuiGrid-root')) {
       initPageOne();
-    } else if (m.target.firstChild.classList.contains('MuiPaper-root')) {
+    } else if (c.classList.contains('MuiPaper-root')) {
       initPageTwo();
-    } else if (m.target.firstChild.tagName === 'FORM') {
+    } else if (c.tagName === 'FORM') {
       initPageThree();
     }
   };
-  const pageObserver = new MutationObserver(onPageChange);
+  const pageObserver = new MutationObserver((l) => onPageChange(l[0].target.firstElementChild));
   observeMut('#root', (m) => {
     if ($('#root > .MuiContainer-root')) {
-      pageObserver.observe($('.MuiContainer-root'), {
-        childList: true
-      });
-      onPageChange([{
-        target: $('.MuiContainer-root')
-      }]);
+      pageObserver.observe($('.MuiContainer-root'), { childList: true });
+      onPageChange($('.MuiContainer-root').firstElementChild);
     }
   });
 
@@ -197,40 +75,53 @@ mixin('link', function() {
       alert('Cannot upload new file as there are still old records that have not yet been verified!');
       return;
     }
+    if (!readXlsxFile) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
     const rows = await readXlsxFile(e.target.files[0]);
-    const mobileMap = new Map();
-    const idAndNameMap = new Map();
+    let headerSize = 0;
+    while (!rows[headerSize][0] instanceof Date) {
+      headerSize++;
+    }
+    const mobileMap = new Map(); // key: mobile number, value: idbkey
+    const idAndNamesMap = new Map(); // key: ID+Name, value: idbkey
     for (let i = 2; i < rows.length; i++) {
       const key = i - 2;
       const val = {
         date: rows[i][0],
         mobile: rows[i][2],
         id: rows[i][7],
-        name: rows[i][8],
-        myinfo: rows[i][13] === 'YES',
-        verified: false
-        // additional fields: hasDuplicates, otherIds, nameRepeated, isDuplicate
-        // myinfo or nameRepeated == true => don't need to check, but if nameRepeated and hasDuplicates => need to put 'DUPLICATE' on the correct values
+        name: rows[i][8]
+        // additional fields:
+        // usesMyInfo => whether info was retrieved from myinfo, no checking is required if true
+        // isExtraMobile => whether a previous number already has the same customer, no checking is required if true
+        // keysOfExtraMobiles => Array of idbkeys of extra mobile numbers of the same customer
+        // isExtraId => whether is it an extra different ID of the same mobile number, no checking is required if true, as all will be handled when the original is checked
+        // extraIds => Map of idbkeys (k) and extra IDs (v) of the customer, for the same mobile number
+        // isIncorrectId => this field is set during runtime, after user has chosen which ID is the correct one
+        // verified => whether user has verified this number and customer
       };
+      if (rows[i][13] === 'YES') val.usesMyInfo = true;
       if (mobileMap.has(val.mobile)) {
-        const prevKey = mobileMap.get(val.mobile);
-        idbKeyval.update(prevKey, (v) => {
-          if (!v.hasDuplicates) {
-            v.hasDuplicates = true;
-            v.otherIds = {};
-          }
-          v.otherIds[key] = val.id;
+        const keyOfOriginal = mobileMap.get(val.mobile);
+        idbKeyval.update(keyOfOriginal, (v) => {
+          v.extraIds ??= {};
+          v.extraIds[key] = val.id;
           return v;
         });
-        val.hasDuplicates = true;
+        val.isExtraId = true;
       } else {
         mobileMap.set(val.mobile, key);
       }
       const idAndName = `${val.id}+${val.name}`;
       if (idAndNameMap.has(idAndName)) {
-        val.nameRepeated = true;
+        const keyOfOriginal = idAndNameMap.get(idAndName);
+        idbKeyval.update(keyOfOriginal, (v) => {
+          v.keysOfExtraMobiles ??= [];
+          v.keysOfExtraMobiles.push(val.mobile);
+          return v;
+        });
+        val.isExtraMobile = true;
       } else {
-        idAndNameMap.set(idAndName, '');
+        idAndNameMap.set(idAndName, key);
       }
       idbKeyval.set(key, val);
     }
@@ -239,6 +130,7 @@ mixin('link', function() {
     }
     idbKeyval.clear();
   }
+
   function createUploadBn() {
     if (UploadBn) return;
     UploadBn = createElem('label', 'UPLOAD', {
@@ -304,7 +196,7 @@ mixin('link', function() {
       type: 'button',
       className: 'css-17kvgbn',
       style: 'position:absolute;top:16px;right:16px;padding:0.5rem 1.2rem',
-      onclick: function() {
+      onclick: function () {
         navigator.clipboard.writeText(copyText).then(() => {
           this.textContent = 'COPIED!';
         })
@@ -469,7 +361,7 @@ mixin('link', function() {
   }
 
   function goBackToPageOne() {
-   if ($('body .custom-overlay')) {
+    if ($('body .custom-overlay')) {
       $('body .custom-overlay').remove();
     }
     if ($('#root > .MuiSnackbar-root')) {
@@ -486,159 +378,100 @@ mixin('link', function() {
   });
 }, { runAsContentScript: true });
 
-mixin('https://service2.mom.gov.sg', function() {
-  // checks if script has already been run
-  if (Object.hasOwn(HTMLElement.prototype, '$')) return;
-  const $ = (q) => document.querySelector(q);
-  Object.defineProperty(HTMLElement.prototype, '$', {
-    value: function(q) {
-      return this.querySelector(q)
-    }
-  });
+mixin('link', `
+  .custom-overlay {
+    height: 100%;
+    position: fixed;
+    inset: 0;
+    padding: 16px;
+    background: rgba(0, 0, 0, .5);
+  }
+  .custom-dialog {
+    position: relative;
+    display: flex;
+    height: 100%;
+    border-radius: 12px;
+    background: #EEE;
+    overflow: hidden;
+  }
+  .btn-back {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    margin: 0;
+  }
+  .image-column {
+    flex: 2;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #BBB;
+    gap: 1px;
+  }
+  .image-column>.img-wrapper {
+    flex: 1;
+    background: #DDD;
+    overflow: hidden;
+  }
+  .image-column img {
+    height: 0;
+    min-height: 100%;
+    width: 100%;
+    object-fit: contain;
+    image-orientation: from-image;
+  }
+  .info-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 24px;
+  }
+  .info-row {
+    position: relative;
+    margin: 10px 0;
+  }
+  .info-row>b {
+    font-size: 14px;
+  }
+  .info-row>p {
+    margin: 2px 0;
+    font-size: 18px;
+    font-family: system-ui;
+  }
+  .info-row>.btn-wp-check {
+    position: absolute;
+    top: 6px;
+    left: 120px;
+    margin: 0;
+    padding: 0.5em 1em;
+  }
+  .dialog-footer {
+    display: flex;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 76px;
+    padding: 16px;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .dialog-footer>button {
+    margin: 0;
+  }
+  .dialog-footer>button.btn-edit, .custom-dialog>.btn-back {
+    color: rgb(255, 158, 27);
+    background-color: #FFF;
+  }
+  .MuiSnackbar-root {
+    height: 112px;
+    background-color: transparent;
+    pointer-events: none;
+  }
+  .MuiSnackbar-root > .MuiPaper-root {
+    pointer-events: auto;
+  }
+`);
 
-  // {"id":"G1234567K","name":"John Doe","dob":"01 Jan 1997"}
-  let workPass;
-
-  function isWorkPassEqual(a, b) {
-    return a != null && a.id === b.id && a.dob === b.dob;
-  }
-  async function getWorkPassInfo() {
-    if (!document.hasFocus()) return;
-    const cbText = await navigator.clipboard.readText();
-    try {
-      if (cbText.length < 10) throw new Error();
-      const newWorkPass = JSON.parse(cbText);
-      if (!newWorkPass.id || !newWorkPass.name || !newWorkPass.dob) {
-        throw new Error();
-      }
-      if (!isWorkPassEqual(workPass, newWorkPass)) {
-        workPass = newWorkPass;
-        formSubmitted = false;
-        if (location.href.endsWith('search') && $('main').firstElementChild) {
-          inputFormValues();
-        } else if (location.href.endsWith('summary')) {
-          $('[data-qa=summary_check_another_btn]').click();
-        }
-      }
-    } catch (_) {}
-  }
-  window.addEventListener('focus', getWorkPassInfo);
-  getWorkPassInfo();
-
-  let formHasValues = false,
-    formSubmitted = false;
-
-  function getFINInput() {
-    return new Promise((resolve) => {
-      if ($('#search_fin_input')) resolve($('#search_fin_input'));
-      const o = new MutationObserver((l) => {
-        for (const m of l) {
-          if (m.addedNodes.length) {
-            o.disconnect();
-            resolve($('#search_fin_input'));
-          }
-        }
-      });
-      o.observe($('.MomCard__Body'), {
-        childList: true
-      });
-      $('input[type=radio]').click();
-    });
-  }
-  const recaptchaObserver = new MutationObserver((l) => {
-    for (const m of l) {
-      if (!m.addedNodes.length) continue;
-      if (workPass && !formSubmitted) {
-        clickRecaptcha();
-      }
-    }
-  });
-
-  function clickRecaptcha() {
-    const f = $('#recaptcha iframe');
-    if (f) {
-      const CaptchaRes = $('#recaptcha textarea');
-      if (!CaptchaRes || !CaptchaRes.value) {
-        f.contentWindow.postMessage('clickRecaptcha', '*');
-      }
-      tryToSubmitForm();
-    }
-  }
-
-  function tryToSubmitForm() {
-    const CaptchaRes = $('#recaptcha textarea');
-    if (!CaptchaRes || !formHasValues) return;
-    if (!CaptchaRes.value) {
-      if (!Object.hasOwn(CaptchaRes, 'value')) {
-        CaptchaRes._value = CaptchaRes.value;
-        Object.defineProperty(CaptchaRes, 'value', {
-          get: function() {
-            return this._value;
-          },
-          set: function(v) {
-            this._value = v;
-            tryToSubmitForm();
-          }
-        });
-      }
-      return;
-    }
-    $('[data-qa=search_submit_btn]').click();
-    formSubmitted = true;
-  }
-  async function inputFormValues() {
-    if (formSubmitted) return;
-    const DOBInput = $('#search_date_of_birth_input');
-    const FINInput = await getFINInput();
-    DOBInput.value = workPass.dob;
-    DOBInput.dispatchEvent(new Event('blur'));
-    FINInput.value = workPass.id;
-    FINInput.dispatchEvent(new Event('input'));
-    formHasValues = true;
-    clickRecaptcha();
-  }
-
-  function checkWorkPassName() {
-    try {
-      const raw = $('.MomPageHeader__StickyBarWrapper strong').textContent.trim();
-      const words = raw.split(' ').map((w) => w.replace(/\*/g, ''));
-      const isValid = workPass.name.split(' ').map((w, i) => w.startsWith(words[i])).reduce((a, b) => a && b);
-      if (!isValid) throw new Error('Workpass name does not match!');
-    } catch(e) {
-      alert(e);
-    }
-  }
-
-  function onPageChange(page) {
-    const url = location.href;
-    formHasValues = false;
-    if (url.endsWith('prelanding')) {
-      page.$('button').click();
-      page.$('.MomCard__Body').lastChild.$('button').click();
-    } else if (url.endsWith('landing')) {
-      page.$('button').click();
-    } else if (url.endsWith('search')) {
-      if (workPass) {
-        inputFormValues();
-        recaptchaObserver.observe($('#recaptcha'), {
-          childList: true
-        });
-      }
-    } else if (url.endsWith('summary')) {
-      checkWorkPassName();
-    }
-  }
-  const mainObserver = new MutationObserver((l) => {
-    for (const m of l) {
-      if (!m.addedNodes.length || m.addedNodes[0].nodeType !== 1) continue;
-      onPageChange(m.addedNodes[0]);
-    }
-  });
-  // if children were added before mutation observer was even connected
-  if ($('main').children.length) {
-    onPageChange($('main').firstElementChild);
-  }
-  mainObserver.observe($('main'), {
-    childList: true
-  });
-});
+mixin("https://service2.mom.gov.sg", function () { if (Object.hasOwn(HTMLElement.prototype, "$")) return; const r = t => document.querySelector(t); Object.defineProperty(HTMLElement.prototype, "t", { value: function (t) { return this.querySelector(t) } }); let i; function e(t, n) { return t != null && t.id === n.id && t.i === n.i } async function t() { if (!document.hasFocus()) return; const t = await navigator.clipboard.readText(); try { if (t.length < 10) throw new Error; const n = JSON.parse(t); if (!n.id || !n.name || !n.i) { throw new Error } if (!e(i, n)) { i = n; c = false; if (location.href.endsWith("search") && r("main").firstElementChild) { h() } else if (location.href.endsWith("summary")) { r("[data-qa=summary_check_another_btn]").click() } } } catch (t) { } } window.addEventListener("focus", t); t(); let o = false, c = false; function a() { return new Promise(e => { if (r("#search_fin_input")) e(r("#search_fin_input")); const i = new MutationObserver(t => { for (const n of t) { if (n.addedNodes.length) { i.disconnect(); e(r("#search_fin_input")) } } }); i.observe(r(".MomCard__Body"), { childList: true }); r("input[type=radio]").click() }) } const s = new MutationObserver(t => { for (const n of t) { if (!n.addedNodes.length) continue; if (i && !c) { f() } } }); function f() { const t = r("#recaptcha iframe"); if (t) { const n = r("#recaptcha textarea"); if (!n || !n.value) { t.contentWindow.postMessage("clickRecaptcha", "*") } u() } } function u() { const t = r("#recaptcha textarea"); if (!t || !o) return; if (!t.value) { if (!Object.hasOwn(t, "value")) { t.o = t.value; Object.defineProperty(t, "value", { get: function () { return this.o }, set: function (t) { this.o = t; u() } }) } return } r("[data-qa=search_submit_btn]").click(); c = true } async function h() { if (c) return; const t = r("#search_date_of_birth_input"); const n = await a(); t.value = i.i; t.dispatchEvent(new Event("blur")); n.value = i.id; n.dispatchEvent(new Event("input")); o = true; f() } function l() { try { const t = r(".MomPageHeader__StickyBarWrapper strong").textContent.trim(); const e = t.split(" ").map(t => t.replace(/\*/g, "")); const n = i.name.split(" ").map((t, n) => t.startsWith(e[n])).reduce((t, n) => t && n); if (!n) throw new Error("Workpass name does not match!") } catch (t) { alert(t) } } function m(t) { const n = location.href; o = false; if (n.endsWith("prelanding")) { t.t("button").click(); t.t(".MomCard__Body").lastChild.t("button").click() } else if (n.endsWith("landing")) { t.t("button").click() } else if (n.endsWith("search")) { if (i) { h(); s.observe(r("#recaptcha"), { childList: true }) } } else if (n.endsWith("summary")) { l() } } const n = new MutationObserver(t => { for (const n of t) { if (!n.addedNodes.length || n.addedNodes[0].nodeType !== 1) continue; m(n.addedNodes[0]) } }); if (r("main").children.length) { m(r("main").firstElementChild) } n.observe(r("main"), { childList: true }) });
