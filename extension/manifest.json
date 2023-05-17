@@ -44,5 +44,9 @@
       "all_frames": false,
       "run_at": "document_end"
     }
+  ],
+  "web_accessible_resources": [
+    "modules/idb-keyval.js",
+    "modules/read-excel-file.js"
   ]
 }

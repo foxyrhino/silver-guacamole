@@ -1,5 +1,4 @@
-
-mixin('put-link-here', `
+mixin('https://prepaidreg.m1.com.sg/', `
   .custom-overlay {
     height: 100%;
     position: fixed;
@@ -46,7 +45,7 @@ mixin('put-link-here', `
     display: flex;
     flex-direction: column;
     justify-content: center;
-    padding: 60px 16px;
+    padding: 24px;
   }
   .info-row {
     position: relative;
@@ -73,8 +72,8 @@ mixin('put-link-here', `
     left: 0;
     right: 0;
     bottom: 0;
-    height: 60px;
-    padding: 8px 16px;
+    height: 76px;
+    padding: 16px;
     justify-content: flex-end;
     gap: 8px;
   }
@@ -95,9 +94,13 @@ mixin('put-link-here', `
   }
 `);
 
-mixin('put-link-here', function() {
+mixin('https://prepaidreg.m1.com.sg/', function() {
   // checks if script has already been run
   if (Object.hasOwn(HTMLElement.prototype, '$')) return;
+
+  import(chrome.runtime.getURL('modules/idb-keyval.js'));
+  import(chrome.runtime.getURL('modules/read-excel-file.js'));
+
   const $ = (q) => document.querySelector(q);
   Object.defineProperty(HTMLElement.prototype, '$', {
     value: function(q) {
@@ -136,6 +139,34 @@ mixin('put-link-here', function() {
     });
   }
 
+  function createDB() {
+    // TODO: Save excel data into db
+  }
+
+  let currentMobile, clipboardMobile;
+  async function getMobile() {
+    if (!document.hasFocus()) return;
+    const cbText = (await navigator.clipboard.readText()).trim();
+    if (isNaN(+cbText) || cbText.length !== 8) return;
+    clipboardMobile = cbText;
+    inputNewMobile();
+  }
+  getMobile();
+  window.addEventListener('focus', getMobile);
+  function inputNewMobile() {
+    if (currentMobile === clipboardMobile) return;
+    if (pageState !== 1) {
+      if (pageState > 1) goBackToPageOne();
+      return;
+    }
+    const IDInput = $('.MuiGrid-root').children[5].$('input');
+    const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    inputSetter.call(IDInput, clipboardMobile);
+    IDInput.dispatchEvent(new Event('input', { bubbles: true }));
+    currentMobile = clipboardMobile;
+  }
+
+  let pageState = 0;
   const onPageChange = (mList) => {
     const m = mList[0];
     if (m.target.firstChild.classList.contains('MuiGrid-root')) {
@@ -158,7 +189,70 @@ mixin('put-link-here', function() {
     }
   });
 
+  let UploadBn;
+  async function onUpload(e) {
+    const dbEntries = await idbKeyval.keys();
+    if (dbEntries.length) {
+      alert('Cannot upload new file as there are still old records that have not yet been verified!');
+      return;
+    }
+    const rows = await readXlsxFile(e.target.files[0]);
+    // rows.length = 12;
+    const mobileMap = new Map();
+    const idAndNameMap = new Map();
+    for (let i = 2; i < rows.length; i++) {
+      const key = i - 2;
+      const val = {
+        date: rows[i][0],
+        mobile: rows[i][2],
+        id: rows[i][7],
+        name: rows[i][8],
+        skip: rows[i][13] === 'YES',
+        verified: false,
+      };
+      if (mobileMap.has(val.mobile)) {
+        const prevKey = mobileMap.get(val.mobile);
+        idbKeyval.update(prevKey, (val) => {
+          if (!val.hasDuplicates) {
+            val.hasDuplicates = true;
+            val.otherIds = {};
+          }
+          val.otherIds[key, val.mobile];
+          idbKeyval.set(prevKey, prevVal);
+        });
+        val.hasDuplicates = true;
+      } else {
+        mobileMap.set(val.mobile, key);
+        const idAndName = '${val.id}+${val.name}';
+        if (idAndNameMap.has(idAndName)) {
+          val.skip = true;
+        } else {
+          idAndNameMap.set(idAndName, null);
+        }
+      }
+      idbKeyval.set(key, val);
+    }
+    console.log(await idbKeyval.entries());
+    idbKeyval.clear();
+  }
+  function createUploadBn() {
+    if (UploadBn) return;
+    UploadBn = createElem('label', 'UPLOAD', {
+      className: 'css-17kvgbn',
+      style: 'position:fixed;right:16px;bottom:16px',
+    });
+    const Input = createElem('input', null, {
+      type: 'file',
+      accept: '.xlsx',
+      style: 'display:none',
+      onchange: onUpload,
+    });
+    UploadBn.append(Input);
+    $('body').append(UploadBn);
+  }
+
   function initPageOne() {
+    createUploadBn();
     const TTInput = $('.MuiGrid-root').children[1].$('[role=button]');
     const IDInput = $('.MuiGrid-root').children[5].$('input');
     const SubmitBn = $('.MuiGrid-root').lastChild.$('button');
@@ -166,7 +260,7 @@ mixin('put-link-here', function() {
       if (e.target.value.trim().length == 8 && !isNaN(+e.target.value)) {
         setTimeout(() => SubmitBn.click(), 100);
       }
-    })
+    });
     pageState = 1;
     if (TTInput.nextSibling.value !== 'REGPORT,REG,CHGOWN') {
       TTInput.dispatchEvent(new MouseEvent('mousedown', {
@@ -186,12 +280,17 @@ mixin('put-link-here', function() {
         }
       });
     }
+    inputNewMobile();
   }
 
   function initPageTwo() {
-    const ViewBn = $('.MuiPaper-root tbody button');
+    if (pageState === 1) {
+      UploadBn.remove();
+      UploadBn = null;
+      const ViewBn = $('.MuiPaper-root tbody button');
+      ViewBn.click();
+    }
     pageState = 2;
-    ViewBn.click();
   }
 
   function addCopyBn(elem) {
@@ -237,10 +336,12 @@ mixin('put-link-here', function() {
       },
       onmousewheel: (e) => {
         e.preventDefault();
-        scale -= e.deltaY / 500;
+        scale *= e.deltaY > 0 ? 0.8 : 1.25;
+        if (scale < 0.512) scale = 0.512;
         elem.firstElementChild.style.scale = scale;
       },
       onmousedown: (e) => {
+        e.preventDefault();
         isMouseDown = true;
       },
       onmouseup: (e) => {
@@ -274,9 +375,7 @@ mixin('put-link-here', function() {
 
   function buildUI() {
     if ($('body .custom-overlay')) return;
-    const Overlay = createElem('div', 0, {
-      className: 'custom-overlay',
-    });
+    const Overlay = createElem('div', 0, { className: 'custom-overlay' });
     const BackBn = createElem('button', 'BACK', {
       className: 'btn-back css-17kvgbn',
       onclick: goBackToPageOne,
@@ -329,7 +428,7 @@ mixin('put-link-here', function() {
         if (m[0].target.src.startsWith('data:image')) {
           const ImgDiv = getImageDiv(m[0].target.src);
           if (!$('.MuiGrid-root').children[28]) {
-            ImgDiv.firstElementChild.style.scale = 0.75;
+            ImgDiv.firstElementChild.style.scale = 0.8;
           }
           Overlay.$('.image-column').prepend(ImgDiv);
         }
@@ -361,8 +460,8 @@ mixin('put-link-here', function() {
   }
 
   function initPageThree() {
-    pageState = 3;
     buildUI();
+    pageState = 3;
   }
 
   function goBackToPageOne() {
@@ -373,7 +472,7 @@ mixin('put-link-here', function() {
       $('#root > .MuiSnackbar-root button').click();
     }
     $('.MuiButtonBase-root').click();
-    $('.MuiButtonBase-root').click();
+    if (pageState === 3) $('.MuiButtonBase-root').click();
   }
 
   window.addEventListener('keyup', (e) => {
@@ -381,7 +480,7 @@ mixin('put-link-here', function() {
       goBackToPageOne();
     }
   });
-});
+}, { runAsContentScript: true });
 
 mixin('https://service2.mom.gov.sg', function() {
   // checks if script has already been run
@@ -405,6 +504,9 @@ mixin('https://service2.mom.gov.sg', function() {
     try {
       if (cbText.length < 10) throw new Error();
       const newWorkPass = JSON.parse(cbText);
+      if (!newWorkPass.id || !newWorkPass.name || !newWorkPass.dob) {
+        throw new Error();
+      }
       if (!isWorkPassEqual(workPass, newWorkPass)) {
         workPass = newWorkPass;
         formSubmitted = false;
@@ -414,9 +516,7 @@ mixin('https://service2.mom.gov.sg', function() {
           $('[data-qa=summary_check_another_btn]').click();
         }
       }
-    } catch (_) {
-      // console.warn('Copied string is not of correct format!');
-    }
+    } catch (_) {}
   }
   window.addEventListener('focus', getWorkPassInfo);
   getWorkPassInfo();
