@@ -15,13 +15,13 @@ mixin('link', async () => {
     for (const [k, v] of Object.entries(a ?? 0)) e[k] = v;
     return e;
   }
-  function observeMut(q, fn, attrs) {
+  function observeMut(q, fn, attrs = { childList: true }) {
     const o = new MutationObserver(fn);
-    o.observe($(q), attrs ?? { childList: true });
+    o.observe($(q), attrs);
   }
-  function observeMutOnce(q, fn, attrs) {
+  function observeMutOnce(q, fn, attrs = { childList: true }) {
     const o = new MutationObserver((m, o) => { fn(m, o); o.disconnect(); });
-    o.observe($(q), attrs ?? { childList: true });
+    o.observe($(q), attrs);
   }
 
   // build all new UI elements first and attach to DOM
@@ -110,14 +110,115 @@ mixin('link', async () => {
         return `<div class="info-row"><b>${x[0]}</b><p>${x[1]}</p></div>`;
       }).join('');
     }});
-    Object.defineProperty(CustomOverlay, 'show', { value: function () { this.classList.add('show'); } });
+    Object.defineProperty(CustomOverlay, 'show', { value: function () { this.classList.add('show') } });
     Object.defineProperty(CustomOverlay, 'hide', { value: function () { this.classList.remove('show'); this.reset(); } });
     $('body').append(CustomOverlay);
   })();
-
+  // construct upload button
+  (function () {
+    UploadBn = createElem('label', 'UPLOAD', { className: 'btn-upload css-17kvgbn' });
+    const Input = createElem('input', null, {
+      type: 'file',
+      accept: '.xlsx',
+      style: 'display:none',
+      onchange: onUpload,
+    });
+    UploadBn.append(Input);
+    Object.defineProperty(UploadBn, 'show', { value: function () { this.classList.add('show') } });
+    Object.defineProperty(UploadBn, 'hide', { value: function () { this.classList.remove('show') } });
+    $('body').append(UploadBn);
+  })();
   // handle reading of excel file and saving it in idb
-  function onUpload() {
-  
+  async function onUpload(e) {
+    // await idbKeyval.clear();
+    const dbEntries = await idbKeyval.keys();
+    if (dbEntries.length) {
+      alert('Cannot upload new file as there are still old records that have not yet been verified!');
+      return;
+    }
+    if (!readXlsxFile) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
+    const rows = await readXlsxFile(e.target.files[0]);
+    let headerSize = 0;
+    while (!rows[headerSize][0] instanceof Date) {
+      headerSize++;
+    }
+    const mobileMap = new Map(); // key: mobile number, value: idbkey
+    const idAndNamesMap = new Map(); // key: ID+Name, value: idbkey
+    for (let i = headerSize; i < rows.length; i++) {
+      const key = i - headerSize;
+      const val = {
+        date: rows[i][0],
+        mobile: rows[i][2]
+        // additional fields:
+        // extraMobilesKeys => Array of idbkeys of extra mobile numbers of the same customer
+        // extraIdsMap => Map of idbkeys (k) and extra IDs (v) of the customer, for the same mobile number
+        // redirect => points to a key for a value that should be checked first before the current one
+        // duplicate => this field is set during runtime, after user has chosen which ID is the correct one
+        // verified => whether user has verified this number and customer
+        // edits => for example [1,1,0,0], with the order being name, id, dob and nationality
+        // rejectReason => a string for reason of rejection
+      };
+      const id = rows[i][7];
+      if (rows[i][13] === 'YES') val.verified = true; // Auto verified if retrieved from myinfo
+      if (mobileMap.has(val.mobile)) {
+        const keyOfOriginal = mobileMap.get(val.mobile);
+        idbKeyval.update(keyOfOriginal, (v) => {
+          v.extraIds ??= {};
+          v.extraIds[key] = id;
+          return v;
+        });
+        val.redirect = keyOfOriginal;
+      } else {
+        mobileMap.set(val.mobile, key);
+      }
+      const idAndName = `${id}+${rows[i][8]}`;
+      if (idAndNameMap.has(idAndName)) {
+        const keyOfOriginal = idAndNameMap.get(idAndName);
+        idbKeyval.update(keyOfOriginal, (v) => {
+          v.extraMobilesKeys ??= [];
+          v.extraMobilesKeys.push(key);
+          return v;
+        });
+        val.redirect = keyOfOriginal;
+      } else {
+        idAndNameMap.set(idAndName, key);
+      }
+      idbKeyval.set(key, val);
+    }
+    for (const [k, v] of await idbKeyval.entries()) {
+      console.log(k, v);
+    }
+    idbKeyval.clear();
+  }
+  async function markAsVerified(k, correctId) {
+    return await idbKeyval.update(k, (v) => {
+      if (v.verified) return;
+      if (v.extraIdsMap && correctId == null) throw new Error('Please provide a correct ID!');
+      if (v.extraIdsMap) {
+        if (correctId === v.id) {
+          Object.keys(extraIdsMap).forEach((k) => markAsDuplicate(k));
+        } else {
+          v.duplicate = true;
+          const entries = Object.entries(extraIdsMap)
+          const keyOfCorrectId = entries.filter((e) => e[1] === correctId)[0][0];
+          // TODO: continue here
+        }
+        if (k === keyOfCorrectId) {
+          Object.entries(extraIdsMap).filter((e) => e[1] !== correctId).forEach(() => {});
+        } else {
+          markAsVerified(keyOfCorrectId);
+        }
+      }
+      v.verified = true;
+      return v;
+    });
+  }
+  async function markAsDuplicate(k) {
+    return await idbKeyval.update(k, (v) => {
+      v.duplicate = true;
+      v.verified = true;
+      return v;
+    });
   }
 
   // get mobile number from clipboard automatically
@@ -150,11 +251,11 @@ mixin('link', async () => {
   let pageState = 0;
   const onPageChange = (c) => {
     if (c.classList.contains('MuiGrid-root')) {
-      initPageOne();
+      pageOne();
     } else if (c.classList.contains('MuiPaper-root')) {
-      initPageTwo();
+      pageTwo();
     } else if (c.tagName === 'FORM') {
-      initPageThree();
+      pageThree();
     }
   };
   // on first load, the main container isn't inserted yet, so we need to wait for the elem to be inserted
@@ -166,8 +267,8 @@ mixin('link', async () => {
     }
   });
 
-  function initPageOne() {
-    showUploadBn();
+  function pageOne() {
+    UploadBn.show();
     const TTInput = $('.MuiGrid-root').children[1].$('[role=button]');
     const IDInput = $('.MuiGrid-root').children[5].$('input');
     const SubmitBn = $('.MuiGrid-root').lastChild.$('button');
@@ -188,19 +289,18 @@ mixin('link', async () => {
     }
     inputNewMobile();
   }
-
-  function initPageTwo() {
+  function pageTwo() {
     if (pageState === 1) {
-      hideUploadBn();
+      UploadBn.hide();
       const ViewBn = $('.MuiPaper-root tbody button');
+      // TODO: once idb functionality is done, check date before clicking view
       ViewBn.click();
     }
     pageState = 2;
   }
-
-  function initPageThree() {
+  function pageThree() {
     pageState = 3;
-    getInfo();
+    updateAndShowCustomOverlay();
   }
 
   function goBackToPageOne() {
@@ -216,117 +316,24 @@ mixin('link', async () => {
     if (e.key === 'Escape' || e.key === '`') goBackToPageOne();
   });
 
-  let UploadBn;
-  async function onUpload(e) {
-    await idbKeyval.clear();
-    const dbEntries = await idbKeyval.keys();
-    if (dbEntries.length) {
-      alert('Cannot upload new file as there are still old records that have not yet been verified!');
-      return;
-    }
-    if (!readXlsxFile) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
-    const rows = await readXlsxFile(e.target.files[0]);
-    let headerSize = 0;
-    while (!rows[headerSize][0] instanceof Date) {
-      headerSize++;
-    }
-    const mobileMap = new Map(); // key: mobile number, value: idbkey
-    const idAndNamesMap = new Map(); // key: ID+Name, value: idbkey
-    for (let i = 2; i < rows.length; i++) {
-      const key = i - 2;
-      const val = {
-        date: rows[i][0],
-        mobile: rows[i][2],
-        id: rows[i][7],
-        name: rows[i][8]
-        // additional fields:
-        // usesMyInfo => whether info was retrieved from myinfo, no checking is required if true
-        // isExtraMobile => whether a previous number already has the same customer, no checking is required if true
-        // keysOfExtraMobiles => Array of idbkeys of extra mobile numbers of the same customer
-        // isExtraId => whether is it an extra different ID of the same mobile number, no checking is required if true, as all will be handled when the original is checked
-        // extraIds => Map of idbkeys (k) and extra IDs (v) of the customer, for the same mobile number
-        // isIncorrectId => this field is set during runtime, after user has chosen which ID is the correct one
-        // verified => whether user has verified this number and customer
-        // edits => for example [1,1,0,0], with the order being name, id, dob and nationality
-        // rejectReason => a string for reason of rejection
-      };
-      if (rows[i][13] === 'YES') val.usesMyInfo = true;
-      if (mobileMap.has(val.mobile)) {
-        const keyOfOriginal = mobileMap.get(val.mobile);
-        idbKeyval.update(keyOfOriginal, (v) => {
-          v.extraIds ??= {};
-          v.extraIds[key] = val.id;
-          return v;
-        });
-        val.isExtraId = true;
-      } else {
-        mobileMap.set(val.mobile, key);
-      }
-      const idAndName = `${val.id}+${val.name}`;
-      if (idAndNameMap.has(idAndName)) {
-        const keyOfOriginal = idAndNameMap.get(idAndName);
-        idbKeyval.update(keyOfOriginal, (v) => {
-          v.keysOfExtraMobiles ??= [];
-          v.keysOfExtraMobiles.push(val.mobile);
-          return v;
-        });
-        val.isExtraMobile = true;
-      } else {
-        idAndNameMap.set(idAndName, key);
-      }
-      idbKeyval.set(key, val);
-    }
-    for (const [k, v] of await idbKeyval.entries()) {
-      console.log(k, v);
-    }
-    idbKeyval.clear();
-  }
-
-  function showUploadBn() {
-    if (UploadBn) {
-      
-      return;
-    }
-    UploadBn = createElem('label', 'UPLOAD', {
-      className: 'css-17kvgbn',
-      style: 'position:fixed;right:16px;bottom:16px',
-    });
-    const Input = createElem('input', null, {
-      type: 'file',
-      accept: '.xlsx',
-      style: 'display:none',
-      onchange: onUpload,
-    });
-    UploadBn.append(Input);
-    $('body').append(UploadBn);
-  }
-
-  // TODO: Account for Transfer for Ownership (has both old and new customer details), Number Port Request (extra row of port in numbers), and special case of corporate account
-  const dataStrings = ['Time', 'ID', 'Name', 'DOB', 'Nationality', 'Local Count', 'Retrieved From MyInfo'];
-  const dataIndexes = [1, 14, 15, 16, 17, 21, 22];
-  const getDataFromPage = (i) => $('.MuiGrid-root').children[i].$('p').textContent.trim();
-
-  let transactionInfo = []; // date, transaction type, account type
-  let customerInfo = []; // id, name, dob, nationality, local count, retrieved from myInfo
-  let customerIdType = ''; // 'NRIC No.', 'PASSPORT No.' or 'WORKP No.'
-  let imageSrcs = [];
-
+  // Retrieves information on page 3 for use in the custom overlay
   const getInfoFromCell = (e) => e.$('p').textContent.trim();
   const getHeadingFromCell = (e) => e.$('label').textContent.trim();
-  function getInfo() {
+  function updateAndShowCustomOverlay() {
     if (pageState !== 3) return;
     const cells = $('.MuiGrid-root').children;
     const info = {};
     info['Transaction Date Time'] = getInfoFromCell(cells[1]);
     let i = cells.length - 1, imgPos = 1;
+    // get images
     while (imgPos >= 0 && cells[i].$('img')) {
       const img = cells[i].$('img');
-      if (img.src.startsWith('data:image') {
+      if (img.src.startsWith('data:image')) {
         CustomOverlay.updateImage(imgPos, img.src);
       } else {
         observeMut(img, (l, o) => {
           for (const m of l) {
-            if (m.target.src.startsWith('data:image') {
+            if (m.target.src.startsWith('data:image')) {
               CustomOverlay.updateImage(imgPos, m.target.src);
               o.disconnect();
             }
@@ -336,7 +343,21 @@ mixin('link', async () => {
       imgPos--;
       i--;
     }
-    transactionInfo = { date: getInfoFromCell(1), transType: getInfoFromCell(2), accountType = getInfoFromCell(3) };
+    i -= 4; // TODO: check if this value is correct
+    // ID
+    info[getHeadingFromCell(cells[i-8])] = getInfoFromCell(cells[i-8]);
+    // Special case for corporate account
+    if (getInfoFromCell(cells[3]) === 'CORPORATE') {
+      info['Corporate Name'] = getInfoFromCell(cells[i-11]);
+      info['Customer Name'] = getInfoFromCell(cells[i-7]);
+    } else {
+      info['Name'] = getInfoFromCell(cells[i-7]);
+    }
+    info['DOB'] = getInfoFromCell(cells[i-6]);
+    info['Nationality'] = getInfoFromCell(cells[i-5]);
+    info['Local Count'] = getInfoFromCell(cells[i-1]);
+    info['Retrieved from MyInfo'] = getInfoFromCell(cells[i]);
+    CustomOverlay.updateInfo(info);
     CustomOverlay.show();
   }
 
@@ -359,6 +380,11 @@ mixin('link', async () => {
 mixin('link', `
   .btn-upload, .custom-overlay {
     display: none;
+  }
+  .btn-upload {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
   }
   .btn-upload.show {
     display: inline-flex;
