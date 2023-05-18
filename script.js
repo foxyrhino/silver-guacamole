@@ -29,7 +29,7 @@ mixin('link', async () => {
   // construct custom overlay
   (function () {
     CustomOverlay = createElem('div', null, { className: 'custom-overlay' });
-    const Dialog = `
+    CustomOverlay.innerHTML = `
       <div class="custom-dialog">
         <div class="image-column">
           <div class="image-wrapper"><img alt="" src="" draggable="false"></div>
@@ -43,7 +43,6 @@ mixin('link', async () => {
         <button class="btn-back css-17kvgbn">BACK</button>
       </div>
     `;
-    CustomOverlay.insertAdjacentHTML('beforeend', Dialog);
     CustomOverlay.$('.btn-back').onclick = goBackToPageOne;
     CustomOverlay.$('.btn-edit').onclick = () => {
       CustomOverlay.hide();
@@ -74,14 +73,14 @@ mixin('link', async () => {
         prevX = x;
         prevY = y;
       };
-      elem.mousewheel = (e) => {
+      elem.onmousewheel = (e) => {
         e.preventDefault();
         scale *= e.deltaY > 0 ? 0.8 : 1.25;
         if (scale < 0.512) scale = 0.512;
         elem.firstElementChild.style.scale = scale;
       };
-      elem.mousedown = (e) => { e.preventDefault(); isMouseDown = true; };
-      elem.mouseup = (e) => {
+      elem.onmousedown = (e) => { e.preventDefault(); isMouseDown = true; };
+      elem.onmouseup = (e) => {
         isMouseDown = false;
         if (isDragging) {
           isDragging = false;
@@ -97,7 +96,7 @@ mixin('link', async () => {
         }
         elem.firstElementChild.style.rotate = `${rotate * 90}deg`;
       };
-      elem.mouseleave = (e) => { isDragging = false; isMouseDown = false; };
+      elem.onmouseleave = (e) => { isDragging = false; isMouseDown = false; };
     });
     Object.defineProperty(CustomOverlay, 'reset', {value: function () {
       this.$('.info-column').innerHTML = '';
@@ -115,6 +114,11 @@ mixin('link', async () => {
     Object.defineProperty(CustomOverlay, 'hide', { value: function () { this.classList.remove('show'); this.reset(); } });
     $('body').append(CustomOverlay);
   })();
+
+  // handle reading of excel file and saving it in idb
+  function onUpload() {
+  
+  }
 
   // get mobile number from clipboard automatically
   let currentMobile, clipboardMobile;
@@ -196,7 +200,7 @@ mixin('link', async () => {
 
   function initPageThree() {
     pageState = 3;
-    showCustomOverlay();
+    getInfo();
   }
 
   function goBackToPageOne() {
@@ -209,9 +213,7 @@ mixin('link', async () => {
   }
 
   window.addEventListener('keyup', (e) => {
-    if (e.key === 'Escape' || e.key === '`') {
-      goBackToPageOne();
-    }
+    if (e.key === 'Escape' || e.key === '`') goBackToPageOne();
   });
 
   let UploadBn;
@@ -310,10 +312,32 @@ mixin('link', async () => {
   let imageSrcs = [];
 
   const getInfoFromCell = (e) => e.$('p').textContent.trim();
-  function getInfoAndImages() {
+  const getHeadingFromCell = (e) => e.$('label').textContent.trim();
+  function getInfo() {
     if (pageState !== 3) return;
     const cells = $('.MuiGrid-root').children;
+    const info = {};
+    info['Transaction Date Time'] = getInfoFromCell(cells[1]);
+    let i = cells.length - 1, imgPos = 1;
+    while (imgPos >= 0 && cells[i].$('img')) {
+      const img = cells[i].$('img');
+      if (img.src.startsWith('data:image') {
+        CustomOverlay.updateImage(imgPos, img.src);
+      } else {
+        observeMut(img, (l, o) => {
+          for (const m of l) {
+            if (m.target.src.startsWith('data:image') {
+              CustomOverlay.updateImage(imgPos, m.target.src);
+              o.disconnect();
+            }
+          }
+        }, { attributeFilter: ['src'] });
+      }
+      imgPos--;
+      i--;
+    }
     transactionInfo = { date: getInfoFromCell(1), transType: getInfoFromCell(2), accountType = getInfoFromCell(3) };
+    CustomOverlay.show();
   }
 
   let w;
