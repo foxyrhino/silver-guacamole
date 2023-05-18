@@ -1,15 +1,14 @@
-
-
 mixin('link', async () => {
   // checks if script has already been run
   if (Object.hasOwn(HTMLElement.prototype, '$')) return;
 
   await import(chrome.runtime.getURL('modules/idb-keyval.js'));
 
+  // useful utils
   const $ = (q) => document.querySelector(q);
-  Object.defineProperty(HTMLElement.prototype, '$', {
-    value: function (q) { return this.querySelector(q) }
-  });
+  const $$ = (q) => document.querySelectorAll(q);
+  Object.defineProperty(HTMLElement.prototype, '$', { value: function (q) { return this.querySelector(q) } });
+  Object.defineProperty(HTMLElement.prototype, '$$', { value: function (q) { return this.querySelectorAll(q) } });
   function createElem(q, t, a) {
     const e = document.createElement(q);
     if (t) e.append(document.createTextNode(t));
@@ -25,6 +24,99 @@ mixin('link', async () => {
     o.observe($(q), attrs ?? { childList: true });
   }
 
+  // build all new UI elements first and attach to DOM
+  let CustomOverlay, UploadBn;
+  // construct custom overlay
+  (function () {
+    CustomOverlay = createElem('div', null, { className: 'custom-overlay' });
+    const Dialog = `
+      <div class="custom-dialog">
+        <div class="image-column">
+          <div class="image-wrapper"><img alt="" src="" draggable="false"></div>
+          <div class="image-wrapper"><img alt="" src="" draggable="false"></div>
+        </div>
+        <div class="info-column"></div>
+        <div class="dialog-footer">
+          <button class="btn-edit css-17kvgbn">EDIT</button>
+          <button class="btn-close css-17kvgbn">CLOSE</button>
+        </div>
+        <button class="btn-back css-17kvgbn">BACK</button>
+      </div>
+    `;
+    CustomOverlay.insertAdjacentHTML('beforeend', Dialog);
+    CustomOverlay.$('.btn-back').onclick = goBackToPageOne;
+    CustomOverlay.$('.btn-edit').onclick = () => {
+      CustomOverlay.hide();
+      window.scrollTo(0, $('.MuiGrid-root').children[14].offsetTop);
+      $('.MuiGrid-root').children[25].$('button').click();
+    };
+    CustomOverlay.$('.btn-close').onclick = () => CustomOverlay.hide();
+    CustomOverlay.$$('.image-wrapper').forEach((elem) => {
+      let isMouseDown = false, isDragging = false;
+      let x = 0, y = 0, prevX = 0, prevY = 0;
+      let tX = 0, tY = 0, scale = 1, rotate = 0;
+      Object.defineProperty(elem, 'reset', {value: function () {
+        tX = 0, tY = 0, scale = 1, rotate = 0;
+        this.firstElementChild.style = '';
+        this.firstElementChild.src = '';
+      }});
+      elem.oncontextmenu = (e) => e.preventDefault();
+      elem.onmousemove = (e) => {
+        const rect = elem.getBoundingClientRect();
+        x = e.clientX - rect.left;
+        y = e.clientY - rect.top;
+        if (isMouseDown) {
+          isDragging = true;
+          tX += x - prevX;
+          tY += y - prevY;
+          elem.firstElementChild.style.translate = `${tX}px ${tY}px`;
+        }
+        prevX = x;
+        prevY = y;
+      };
+      elem.mousewheel = (e) => {
+        e.preventDefault();
+        scale *= e.deltaY > 0 ? 0.8 : 1.25;
+        if (scale < 0.512) scale = 0.512;
+        elem.firstElementChild.style.scale = scale;
+      };
+      elem.mousedown = (e) => { e.preventDefault(); isMouseDown = true; };
+      elem.mouseup = (e) => {
+        isMouseDown = false;
+        if (isDragging) {
+          isDragging = false;
+          return;
+        }
+        if (e.which == 2) {
+          elem.reset();
+          return;
+        } else if (e.which == 1) {
+          rotate -= 1; if (rotate == -1) rotate = 3;
+        } else if (e.which == 3) {
+          rotate += 1; if (rotate == 4) rotate = 0;
+        }
+        elem.firstElementChild.style.rotate = `${rotate * 90}deg`;
+      };
+      elem.mouseleave = (e) => { isDragging = false; isMouseDown = false; };
+    });
+    Object.defineProperty(CustomOverlay, 'reset', {value: function () {
+      this.$('.info-column').innerHTML = '';
+      this.$$('.image-wrapper').forEach((i) => i.reset());
+    }});
+    Object.defineProperty(CustomOverlay, 'updateImage', {value: function (position, src) {
+      this.$$('.image-wrapper>img')[position].src = src;
+    }});
+    Object.defineProperty(CustomOverlay, 'updateInfo', {value: function (info) {
+      this.$('.info-column').innerHTML = Object.entries(info).map((x) => {
+        return `<div class="info-row"><b>${x[0]}</b><p>${x[1]}</p></div>`;
+      }).join('');
+    }});
+    Object.defineProperty(CustomOverlay, 'show', { value: function () { this.classList.add('show'); } });
+    Object.defineProperty(CustomOverlay, 'hide', { value: function () { this.classList.remove('show'); this.reset(); } });
+    $('body').append(CustomOverlay);
+  })();
+
+  // get mobile number from clipboard automatically
   let currentMobile, clipboardMobile;
   async function getMobile() {
     if (!document.hasFocus()) return;
@@ -36,6 +128,7 @@ mixin('link', async () => {
   getMobile();
   window.addEventListener('focus', getMobile);
 
+  // automatically submit form if there is a new number from clipboard
   function inputNewMobile() {
     if (currentMobile === clipboardMobile) return;
     if (pageState !== 1) {
@@ -49,6 +142,7 @@ mixin('link', async () => {
     currentMobile = clipboardMobile;
   }
 
+  // Handle page changes
   let pageState = 0;
   const onPageChange = (c) => {
     if (c.classList.contains('MuiGrid-root')) {
@@ -59,11 +153,64 @@ mixin('link', async () => {
       initPageThree();
     }
   };
+  // on first load, the main container isn't inserted yet, so we need to wait for the elem to be inserted
   const pageObserver = new MutationObserver((l) => onPageChange(l[0].target.firstElementChild));
   observeMut('#root', (m) => {
     if ($('#root > .MuiContainer-root')) {
       pageObserver.observe($('.MuiContainer-root'), { childList: true });
       onPageChange($('.MuiContainer-root').firstElementChild);
+    }
+  });
+
+  function initPageOne() {
+    showUploadBn();
+    const TTInput = $('.MuiGrid-root').children[1].$('[role=button]');
+    const IDInput = $('.MuiGrid-root').children[5].$('input');
+    const SubmitBn = $('.MuiGrid-root').lastChild.$('button');
+    IDInput.addEventListener('input', (e) => {
+      if (e.target.value.trim().length == 8 && !isNaN(+e.target.value)) setTimeout(() => SubmitBn.click(), 60);
+    });
+    pageState = 1;
+    if (TTInput.nextSibling.value !== 'REGPORT,REG,CHGOWN') {
+      TTInput.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      observeMutOnce('.MuiPopover-root ul', (m) => {
+        const DList = m[0].target;
+        if (DList.children.length) {
+          DList.$$('[aria-selected=true]').forEach((e) => e.click());
+          DList.$$('[data-value=REGPORT], [data-value=REG], [data-value=CHGOWN]').forEach((e) => e.click());
+          $('.MuiPopover-root > .MuiBackdrop-root').click();
+        }
+      });
+    }
+    inputNewMobile();
+  }
+
+  function initPageTwo() {
+    if (pageState === 1) {
+      hideUploadBn();
+      const ViewBn = $('.MuiPaper-root tbody button');
+      ViewBn.click();
+    }
+    pageState = 2;
+  }
+
+  function initPageThree() {
+    pageState = 3;
+    showCustomOverlay();
+  }
+
+  function goBackToPageOne() {
+    CustomOverlay.hide();
+    if ($('#root > .MuiSnackbar-root')) {
+      $('#root > .MuiSnackbar-root button').click();
+    }
+    $('.MuiButtonBase-root').click();
+    if (pageState === 3) $('.MuiButtonBase-root').click();
+  }
+
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'Escape' || e.key === '`') {
+      goBackToPageOne();
     }
   });
 
@@ -98,6 +245,8 @@ mixin('link', async () => {
         // extraIds => Map of idbkeys (k) and extra IDs (v) of the customer, for the same mobile number
         // isIncorrectId => this field is set during runtime, after user has chosen which ID is the correct one
         // verified => whether user has verified this number and customer
+        // edits => for example [1,1,0,0], with the order being name, id, dob and nationality
+        // rejectReason => a string for reason of rejection
       };
       if (rows[i][13] === 'YES') val.usesMyInfo = true;
       if (mobileMap.has(val.mobile)) {
@@ -131,8 +280,11 @@ mixin('link', async () => {
     idbKeyval.clear();
   }
 
-  function createUploadBn() {
-    if (UploadBn) return;
+  function showUploadBn() {
+    if (UploadBn) {
+      
+      return;
+    }
     UploadBn = createElem('label', 'UPLOAD', {
       className: 'css-17kvgbn',
       style: 'position:fixed;right:16px;bottom:16px',
@@ -147,197 +299,21 @@ mixin('link', async () => {
     $('body').append(UploadBn);
   }
 
-  function initPageOne() {
-    createUploadBn();
-    const TTInput = $('.MuiGrid-root').children[1].$('[role=button]');
-    const IDInput = $('.MuiGrid-root').children[5].$('input');
-    const SubmitBn = $('.MuiGrid-root').lastChild.$('button');
-    IDInput.addEventListener('input', (e) => {
-      if (e.target.value.trim().length == 8 && !isNaN(+e.target.value)) {
-        setTimeout(() => SubmitBn.click(), 100);
-      }
-    });
-    pageState = 1;
-    if (TTInput.nextSibling.value !== 'REGPORT,REG,CHGOWN') {
-      TTInput.dispatchEvent(new MouseEvent('mousedown', {
-        bubbles: true
-      }));
-      observeMutOnce('.MuiPopover-root ul', (m) => {
-        const DList = m[0].target;
-        if (DList.children.length) {
-          const values = ['REGPORT', 'REG', 'CHGOWN'];
-          for (const DItem of DList.children) {
-            if (values.includes(DItem.getAttribute('data-value')) !==
-              (DItem.getAttribute('aria-selected') === 'true')) {
-              DItem.click();
-            }
-          }
-          $('.MuiPopover-root > .MuiBackdrop-root').click();
-        }
-      });
-    }
-    inputNewMobile();
-  }
-
-  function initPageTwo() {
-    if (pageState === 1) {
-      UploadBn.remove();
-      UploadBn = null;
-      const ViewBn = $('.MuiPaper-root tbody button');
-      ViewBn.click();
-    }
-    pageState = 2;
-  }
-
-  function addCopyBn(elem) {
-    elem.style.position = 'relative';
-    const copyText = elem.$('p').textContent.trim();
-    const bn = createElem('button', 'Copy', {
-      type: 'button',
-      className: 'css-17kvgbn',
-      style: 'position:absolute;top:16px;right:16px;padding:0.5rem 1.2rem',
-      onclick: function () {
-        navigator.clipboard.writeText(copyText).then(() => {
-          this.textContent = 'COPIED!';
-        })
-      }
-    });
-    elem.append(bn);
-  }
-
+  // TODO: Account for Transfer for Ownership (has both old and new customer details), Number Port Request (extra row of port in numbers), and special case of corporate account
   const dataStrings = ['Time', 'ID', 'Name', 'DOB', 'Nationality', 'Local Count', 'Retrieved From MyInfo'];
   const dataIndexes = [1, 14, 15, 16, 17, 21, 22];
   const getDataFromPage = (i) => $('.MuiGrid-root').children[i].$('p').textContent.trim();
 
-  function getImageDiv(imgSrc) {
-    if (!imgSrc) return null;
-    let isMouseDown = false, isDragging = false;
-    let x = 0, y = 0, prevX = 0, prevY = 0;
-    let tX = 0, tY = 0, scale = 1, rotate = 0;
-    const elem = createElem('div', null, {
-      className: 'img-wrapper',
-      oncontextmenu: (e) => e.preventDefault(),
-      onmousemove: (e) => {
-        const rect = elem.getBoundingClientRect();
-        x = e.clientX - rect.left;
-        y = e.clientY - rect.top;
-        if (isMouseDown) {
-          isDragging = true;
-          tX += x - prevX;
-          tY += y - prevY;
-          elem.firstElementChild.style.translate = `${tX}px ${tY}px`;
-        }
-        prevX = x;
-        prevY = y;
-      },
-      onmousewheel: (e) => {
-        e.preventDefault();
-        scale *= e.deltaY > 0 ? 0.8 : 1.25;
-        if (scale < 0.512) scale = 0.512;
-        elem.firstElementChild.style.scale = scale;
-      },
-      onmousedown: (e) => {
-        e.preventDefault();
-        isMouseDown = true;
-      },
-      onmouseup: (e) => {
-        isMouseDown = false;
-        if (isDragging) {
-          isDragging = false;
-        } else {
-          if (e.which == 2) {
-            tX = 0, tY = 0, scale = 1, rotate = 0;
-            elem.firstElementChild.style = '';
-            return;
-          } else if (e.which == 1) {
-            rotate -= 1;
-            if (rotate == -1) rotate = 3;
-          } else if (e.which == 3) {
-            rotate += 1;
-            if (rotate == 4) rotate = 0;
-          }
-          elem.firstElementChild.style.rotate = `${rotate * 90}deg`;
-        }
-      }
-    });
-    const img = createElem('img', null, {
-      alt: '',
-      src: imgSrc,
-      draggable: false
-    });
-    elem.append(img);
-    return elem;
-  }
+  let transactionInfo = []; // date, transaction type, account type
+  let customerInfo = []; // id, name, dob, nationality, local count, retrieved from myInfo
+  let customerIdType = ''; // 'NRIC No.', 'PASSPORT No.' or 'WORKP No.'
+  let imageSrcs = [];
 
-  function buildUI() {
-    if ($('body .custom-overlay')) return;
-    const Overlay = createElem('div', 0, { className: 'custom-overlay' });
-    const BackBn = createElem('button', 'BACK', {
-      className: 'btn-back css-17kvgbn',
-      onclick: goBackToPageOne,
-    });
-    const EditBn = createElem('button', 'EDIT', {
-      className: 'btn-edit css-17kvgbn',
-      onclick: () => {
-        Overlay.remove();
-        window.scrollTo(0, $('.MuiGrid-root').children[14].offsetTop);
-        $('.MuiGrid-root').children[25].$('button').click();
-      }
-    });
-    const CloseBn = createElem('button', 'CLOSE', {
-      className: 'css-17kvgbn',
-      onclick: () => {
-        Overlay.remove();
-      }
-    });
-    dataStrings[1] = $('.MuiGrid-root').children[14].$('label').textContent.trim();
-    const Dialog = `
-      <div class="custom-overlay">
-        <div class="custom-dialog">
-          <div class="image-column">
-          </div>
-          <div class="info-column">
-            ${dataIndexes.map((d, i) => `
-              <div class="info-row">
-                <b>${dataStrings[i]}</b>
-                <p>${getDataFromPage(d)}</p>
-              </div>
-            `).join('')}
-          </div>
-          <div class="dialog-footer"></div>
-        </div>
-      </div>
-    `;
-    Overlay.insertAdjacentHTML('beforeend', Dialog);
-    Overlay.$('.custom-dialog').append(BackBn);
-    Overlay.$('.dialog-footer').append(EditBn);
-    Overlay.$('.dialog-footer').append(CloseBn);
-    if (dataStrings[1] === 'WORKP No.') {
-      const CopyBn = createElem('button', 'CHECK WORKPASS', {
-        className: 'btn-wp-check css-17kvgbn',
-        onclick: copyWorkPassInfo
-      });
-      Overlay.$('.info-column').children[1].append(CopyBn);
-    }
-    if ($('.MuiGrid-root').children[27]) {
-      observeMut('.MuiGrid-root :nth-child(28) img', (m, o) => {
-        if (m[0].target.src.startsWith('data:image')) {
-          const ImgDiv = getImageDiv(m[0].target.src);
-          if (!$('.MuiGrid-root').children[28]) {
-            ImgDiv.firstElementChild.style.scale = 0.8;
-          }
-          Overlay.$('.image-column').prepend(ImgDiv);
-        }
-      }, { attributeFilter: ['src'] })
-      if ($('.MuiGrid-root').children[28]) {
-        observeMut('.MuiGrid-root :nth-child(29) img', (m, o) => {
-          if (m[0].target.src.startsWith('data:image')) {
-            Overlay.$('.image-column').append(getImageDiv(m[0].target.src));
-          }
-        }, { attributeFilter: ['src'] })
-      }
-    }
-    $('body').append(Overlay);
+  const getInfoFromCell = (e) => e.$('p').textContent.trim();
+  function getInfoAndImages() {
+    if (pageState !== 3) return;
+    const cells = $('.MuiGrid-root').children;
+    transactionInfo = { date: getInfoFromCell(1), transType: getInfoFromCell(2), accountType = getInfoFromCell(3) };
   }
 
   let w;
@@ -354,37 +330,24 @@ mixin('link', async () => {
       w = window.open('https://service2.mom.gov.sg/workpass/enquiry/search', 'mom-workpass-check');
     }
   }
-
-  function initPageThree() {
-    buildUI();
-    pageState = 3;
-  }
-
-  function goBackToPageOne() {
-    if ($('body .custom-overlay')) {
-      $('body .custom-overlay').remove();
-    }
-    if ($('#root > .MuiSnackbar-root')) {
-      $('#root > .MuiSnackbar-root button').click();
-    }
-    $('.MuiButtonBase-root').click();
-    if (pageState === 3) $('.MuiButtonBase-root').click();
-  }
-
-  window.addEventListener('keyup', (e) => {
-    if (e.key === 'Escape' || e.key === '`') {
-      goBackToPageOne();
-    }
-  });
 }, { runAsContentScript: true });
 
 mixin('link', `
+  .btn-upload, .custom-overlay {
+    display: none;
+  }
+  .btn-upload.show {
+    display: inline-flex;
+  }
   .custom-overlay {
     height: 100%;
     position: fixed;
     inset: 0;
     padding: 16px;
     background: rgba(0, 0, 0, .5);
+  }
+  .custom-overlay.show {
+    display: block;
   }
   .custom-dialog {
     position: relative;
@@ -408,12 +371,17 @@ mixin('link', `
     background: #BBB;
     gap: 1px;
   }
-  .image-column>.img-wrapper {
+  .image-column>.image-wrapper {
     flex: 1;
     background: #DDD;
     overflow: hidden;
+    display: none;
   }
-  .image-column img {
+  /* This is big brain time */
+  .image-column>.image-wrapper:has(img[src^="data:image"]) {
+    display: block;
+  }
+  .image-wrapper>img {
     height: 0;
     min-height: 100%;
     width: 100%;
@@ -474,4 +442,4 @@ mixin('link', `
   }
 `);
 
-mixin("https://service2.mom.gov.sg", function () { if (Object.hasOwn(HTMLElement.prototype, "$")) return; const r = t => document.querySelector(t); Object.defineProperty(HTMLElement.prototype, "t", { value: function (t) { return this.querySelector(t) } }); let i; function e(t, n) { return t != null && t.id === n.id && t.i === n.i } async function t() { if (!document.hasFocus()) return; const t = await navigator.clipboard.readText(); try { if (t.length < 10) throw new Error; const n = JSON.parse(t); if (!n.id || !n.name || !n.i) { throw new Error } if (!e(i, n)) { i = n; c = false; if (location.href.endsWith("search") && r("main").firstElementChild) { h() } else if (location.href.endsWith("summary")) { r("[data-qa=summary_check_another_btn]").click() } } } catch (t) { } } window.addEventListener("focus", t); t(); let o = false, c = false; function a() { return new Promise(e => { if (r("#search_fin_input")) e(r("#search_fin_input")); const i = new MutationObserver(t => { for (const n of t) { if (n.addedNodes.length) { i.disconnect(); e(r("#search_fin_input")) } } }); i.observe(r(".MomCard__Body"), { childList: true }); r("input[type=radio]").click() }) } const s = new MutationObserver(t => { for (const n of t) { if (!n.addedNodes.length) continue; if (i && !c) { f() } } }); function f() { const t = r("#recaptcha iframe"); if (t) { const n = r("#recaptcha textarea"); if (!n || !n.value) { t.contentWindow.postMessage("clickRecaptcha", "*") } u() } } function u() { const t = r("#recaptcha textarea"); if (!t || !o) return; if (!t.value) { if (!Object.hasOwn(t, "value")) { t.o = t.value; Object.defineProperty(t, "value", { get: function () { return this.o }, set: function (t) { this.o = t; u() } }) } return } r("[data-qa=search_submit_btn]").click(); c = true } async function h() { if (c) return; const t = r("#search_date_of_birth_input"); const n = await a(); t.value = i.i; t.dispatchEvent(new Event("blur")); n.value = i.id; n.dispatchEvent(new Event("input")); o = true; f() } function l() { try { const t = r(".MomPageHeader__StickyBarWrapper strong").textContent.trim(); const e = t.split(" ").map(t => t.replace(/\*/g, "")); const n = i.name.split(" ").map((t, n) => t.startsWith(e[n])).reduce((t, n) => t && n); if (!n) throw new Error("Workpass name does not match!") } catch (t) { alert(t) } } function m(t) { const n = location.href; o = false; if (n.endsWith("prelanding")) { t.t("button").click(); t.t(".MomCard__Body").lastChild.t("button").click() } else if (n.endsWith("landing")) { t.t("button").click() } else if (n.endsWith("search")) { if (i) { h(); s.observe(r("#recaptcha"), { childList: true }) } } else if (n.endsWith("summary")) { l() } } const n = new MutationObserver(t => { for (const n of t) { if (!n.addedNodes.length || n.addedNodes[0].nodeType !== 1) continue; m(n.addedNodes[0]) } }); if (r("main").children.length) { m(r("main").firstElementChild) } n.observe(r("main"), { childList: true }) });
+mixin("https://service2.mom.gov.sg",(function(){if(Object.hasOwn(HTMLElement.prototype,"$"))return;const t=t=>document.querySelector(t);let e;async function n(){if(!document.hasFocus())return;const n=await navigator.clipboard.readText();try{if(n.length<10)throw new Error;const r=JSON.parse(n);if(!r.id||!r.name||!r.dob)throw new Error;i=r,(null==(a=e)||a.id!==i.id||a.dob!==i.dob)&&(e=r,o=!1,location.href.endsWith("search")&&t("main").firstElementChild?s():location.href.endsWith("summary")&&t("[data-qa=summary_check_another_btn]").click())}catch(t){}var a,i}Object.defineProperty(HTMLElement.prototype,"$",{value:function(t){return this.querySelector(t)}}),window.addEventListener("focus",n),n();let a=!1,o=!1;const i=new MutationObserver((t=>{for(const n of t)n.addedNodes.length&&e&&!o&&r()}));function r(){const e=t("#recaptcha iframe");if(e){const n=t("#recaptcha textarea");n&&n.value||e.contentWindow.postMessage("clickRecaptcha","*"),c()}}function c(){const e=t("#recaptcha textarea");e&&a&&(e.value?(t("[data-qa=search_submit_btn]").click(),o=!0):Object.hasOwn(e,"value")||(e._value=e.value,Object.defineProperty(e,"value",{get:function(){return this._value},set:function(t){this._value=t,c()}})))}async function s(){if(o)return;const n=t("#search_date_of_birth_input"),i=await new Promise((e=>{t("#search_fin_input")&&e(t("#search_fin_input"));const n=new MutationObserver((a=>{for(const o of a)o.addedNodes.length&&(n.disconnect(),e(t("#search_fin_input")))}));n.observe(t(".MomCard__Body"),{childList:!0}),t("input[type=radio]").click()}));n.value=e.dob,n.dispatchEvent(new Event("blur")),i.value=e.id,i.dispatchEvent(new Event("input")),a=!0,r()}function d(n){const o=location.href;a=!1,o.endsWith("prelanding")?(n.$("button").click(),n.$(".MomCard__Body").lastChild.$("button").click()):o.endsWith("landing")?n.$("button").click():o.endsWith("search")?e&&(s(),i.observe(t("#recaptcha"),{childList:!0})):o.endsWith("summary")&&function(){try{const n=t(".MomPageHeader__StickyBarWrapper strong").textContent.trim().split(" ").map((t=>t.replace(/\*/g,"")));if(!e.name.split(" ").map(((t,e)=>t.startsWith(n[e]))).reduce(((t,e)=>t&&e)))throw new Error("Workpass name does not match!")}catch(t){alert(t)}}()}const h=new MutationObserver((t=>{for(const e of t)e.addedNodes.length&&1===e.addedNodes[0].nodeType&&d(e.addedNodes[0])}));t("main").children.length&&d(t("main").firstElementChild),h.observe(t("main"),{childList:!0})}));
