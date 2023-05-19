@@ -17,17 +17,18 @@ mixin('link', async () => {
   }
   function observeMut(q, fn, attrs = { childList: true }) {
     const o = new MutationObserver(fn);
-    o.observe($(q), attrs);
+    o.observe(typeof q === 'string' ? $(q) : q, attrs);
   }
   function observeMutOnce(q, fn, attrs = { childList: true }) {
     const o = new MutationObserver((m, o) => { fn(m, o); o.disconnect(); });
-    o.observe($(q), attrs);
+    o.observe(typeof q === 'string' ? $(q) : q, attrs);
   }
 
   // build all new UI elements first and attach to DOM
-  let CustomOverlay, UploadBn;
-  // construct custom overlay
+  let CustomOverlay, ShowCustomOverlayBn, UploadBn;
+  // construct custom overlay and customOverlayBn
   (function () {
+    let actualEditBn, actualIdCell;
     CustomOverlay = createElem('div', null, { className: 'custom-overlay' });
     CustomOverlay.innerHTML = `
       <div class="custom-dialog">
@@ -46,8 +47,8 @@ mixin('link', async () => {
     CustomOverlay.$('.btn-back').onclick = goBackToPageOne;
     CustomOverlay.$('.btn-edit').onclick = () => {
       CustomOverlay.hide();
-      window.scrollTo(0, $('.MuiGrid-root').children[14].offsetTop);
-      $('.MuiGrid-root').children[25].$('button').click();
+      window.scrollTo(0, actualIdCell ? actualIdCell.offsetTop : 500);
+      if (actualEditBn) actualEditBn.click();
     };
     CustomOverlay.$('.btn-close').onclick = () => CustomOverlay.hide();
     CustomOverlay.$$('.image-wrapper').forEach((elem) => {
@@ -101,18 +102,31 @@ mixin('link', async () => {
     Object.defineProperty(CustomOverlay, 'reset', {value: function () {
       this.$('.info-column').innerHTML = '';
       this.$$('.image-wrapper').forEach((i) => i.reset());
+      actualEditBn = null; actualIdCell = null;
+    }});
+    Object.defineProperty(CustomOverlay, 'setElementLocations', {value: function (edit, id) {
+      actualEditBn = edit; actualIdCell = id;
     }});
     Object.defineProperty(CustomOverlay, 'updateImage', {value: function (position, src) {
       this.$$('.image-wrapper>img')[position].src = src;
     }});
     Object.defineProperty(CustomOverlay, 'updateInfo', {value: function (info) {
       this.$('.info-column').innerHTML = Object.entries(info).map((x) => {
-        return `<div class="info-row"><b>${x[0]}</b><p>${x[1]}</p></div>`;
+        const row = `<div class="info-row"><b>${x[0]}</b><p>${x[1]}</p>${
+          x[0].startsWith('WORKP')?'<button class="btn-wp-check css-17kvgbn">CHECK WORKPASS</button>':''
+        }</div>`;
+        return row;
       }).join('');
+      const checkWpBn = this.$('.info-column .btn-wp-check');
+      if (checkWpBn) checkWpBn.onclick = copyWorkPassInfo;
     }});
-    Object.defineProperty(CustomOverlay, 'show', { value: function () { this.classList.add('show') } });
-    Object.defineProperty(CustomOverlay, 'hide', { value: function () { this.classList.remove('show'); this.reset(); } });
+    Object.defineProperty(CustomOverlay, 'show', { value: function () { this.classList.add('show'); ShowCustomOverlayBn.hide(); }  });
+    Object.defineProperty(CustomOverlay, 'hide', { value: function () { this.classList.remove('show'); ShowCustomOverlayBn.show(); } });
+    ShowCustomOverlayBn = createElem('button', 'OPEN OVERLAY', { className: 'btn-open-overlay css-17kvgbn', onclick: () => CustomOverlay.show() });
+    Object.defineProperty(ShowCustomOverlayBn, 'show', { value: function () { this.classList.add('show') } });
+    Object.defineProperty(ShowCustomOverlayBn, 'hide', { value: function () { this.classList.remove('show'); } });
     $('body').append(CustomOverlay);
+    $('body').append(ShowCustomOverlayBn);
   })();
   // construct upload button
   (function () {
@@ -128,46 +142,45 @@ mixin('link', async () => {
     Object.defineProperty(UploadBn, 'hide', { value: function () { this.classList.remove('show') } });
     $('body').append(UploadBn);
   })();
+
   // handle reading of excel file and saving it in idb
   async function onUpload(e) {
-    // await idbKeyval.clear();
-    const dbEntries = await idbKeyval.keys();
-    if (dbEntries.length) {
-      alert('Cannot upload new file as there are still old records that have not yet been verified!');
-      return;
+    if (await idbKeyval.get(0)) {
+      const result = confirm('This will delete any old data remaining. Proceed?');
+      if (!result) return;
+      await idbKeyval.clear();
     }
-    if (!readXlsxFile) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
+    if (!window.hasOwnProperty('readXlsxFile')) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
     const rows = await readXlsxFile(e.target.files[0]);
     let headerSize = 0;
-    while (!rows[headerSize][0] instanceof Date) {
+    while (!(rows[headerSize][0] instanceof Date)) {
       headerSize++;
     }
     const mobileMap = new Map(); // key: mobile number, value: idbkey
-    const idAndNamesMap = new Map(); // key: ID+Name, value: idbkey
+    const idAndNameMap = new Map(); // key: ID+Name, value: idbkey
     for (let i = headerSize; i < rows.length; i++) {
       const key = i - headerSize;
+      const id = rows[i][7];
       const val = {
         date: rows[i][0],
-        mobile: rows[i][2]
+        mobile: rows[i][2],
+        id,
         // additional fields:
         // extraMobilesKeys => Array of idbkeys of extra mobile numbers of the same customer
         // extraIdsMap => Map of idbkeys (k) and extra IDs (v) of the customer, for the same mobile number
-        // redirect => points to a key for a value that should be checked first before the current one
         // duplicate => this field is set during runtime, after user has chosen which ID is the correct one
         // verified => whether user has verified this number and customer
         // edits => for example [1,1,0,0], with the order being name, id, dob and nationality
         // rejectReason => a string for reason of rejection
       };
-      const id = rows[i][7];
       if (rows[i][13] === 'YES') val.verified = true; // Auto verified if retrieved from myinfo
       if (mobileMap.has(val.mobile)) {
         const keyOfOriginal = mobileMap.get(val.mobile);
         idbKeyval.update(keyOfOriginal, (v) => {
-          v.extraIds ??= {};
-          v.extraIds[key] = id;
+          v.extraIdsMap ??= new Map();
+          v.extraIdsMap.set(key, id);
           return v;
         });
-        val.redirect = keyOfOriginal;
       } else {
         mobileMap.set(val.mobile, key);
       }
@@ -179,46 +192,54 @@ mixin('link', async () => {
           v.extraMobilesKeys.push(key);
           return v;
         });
-        val.redirect = keyOfOriginal;
       } else {
         idAndNameMap.set(idAndName, key);
       }
       idbKeyval.set(key, val);
     }
-    for (const [k, v] of await idbKeyval.entries()) {
-      console.log(k, v);
-    }
-    idbKeyval.clear();
+    // TODO: link this to webpage
   }
-  async function markAsVerified(k, correctId) {
-    return await idbKeyval.update(k, (v) => {
-      if (v.verified) return;
-      if (v.extraIdsMap && correctId == null) throw new Error('Please provide a correct ID!');
-      if (v.extraIdsMap) {
-        if (correctId === v.id) {
-          Object.keys(extraIdsMap).forEach((k) => markAsDuplicate(k));
-        } else {
-          v.duplicate = true;
-          const entries = Object.entries(extraIdsMap)
-          const keyOfCorrectId = entries.filter((e) => e[1] === correctId)[0][0];
-          // TODO: continue here
-        }
-        if (k === keyOfCorrectId) {
-          Object.entries(extraIdsMap).filter((e) => e[1] !== correctId).forEach(() => {});
-        } else {
-          markAsVerified(keyOfCorrectId);
-        }
+  async function markAsVerified(k, params = {}) {
+    k = +k;
+    const v = await idbKeyval.get(k);
+    if (v.verified) return;
+    if (v.extraIdsMap && params.correctId == null) throw new Error('Please provide a correct ID!');
+    const promises = [];
+    if (v.extraIdsMap) {
+      let correctIdFound = params.correctId === v.id;
+      for (const [k, id] of v.extraIdsMap) {
+        if (!correctIdFound && id === params.correctId) {
+          promises.push(markAsVerified(k, {...params}));
+          correctIdFound = true;
+        } else promises.push(markAsDuplicate(k));
       }
-      v.verified = true;
+      if (params.correctId !== v.id) {
+        delete params.edits;
+        v.duplicate = true;
+      }
+    }
+    v.verified = true;
+    if (params.rejectReason && !v.duplicate) v.rejectReason = params.rejectReason;
+    if (params.edits) v.edits = params.edits;
+    delete params.edits;
+    promises.push(idbKeyval.update(k, (old) => {
+      if (old.verified) return old;
       return v;
-    });
+    }));
+    if (v.extraMobilesKeys) for (const k of v.extraMobilesKeys) promises.push(markAsVerified(k, params));
+    await Promise.all(promises);
   }
   async function markAsDuplicate(k) {
-    return await idbKeyval.update(k, (v) => {
+    k = +k;
+    const v = await idbKeyval.get(k);
+    if (v.verified) return;
+    const promises = [idbKeyval.update(k, (v) => {
       v.duplicate = true;
       v.verified = true;
       return v;
-    });
+    })];
+    if (v.extraMobilesKeys) for (const k of v.extraMobilesKeys) promises.push(markAsDuplicate(k));
+    await Promise.all(promises);
   }
 
   // get mobile number from clipboard automatically
@@ -268,6 +289,7 @@ mixin('link', async () => {
   });
 
   function pageOne() {
+    ShowCustomOverlayBn.hide();
     UploadBn.show();
     const TTInput = $('.MuiGrid-root').children[1].$('[role=button]');
     const IDInput = $('.MuiGrid-root').children[5].$('input');
@@ -296,6 +318,7 @@ mixin('link', async () => {
       // TODO: once idb functionality is done, check date before clicking view
       ViewBn.click();
     }
+    ShowCustomOverlayBn.hide();
     pageState = 2;
   }
   function pageThree() {
@@ -316,11 +339,13 @@ mixin('link', async () => {
     if (e.key === 'Escape' || e.key === '`') goBackToPageOne();
   });
 
+  let wpInfo;
   // Retrieves information on page 3 for use in the custom overlay
   const getInfoFromCell = (e) => e.$('p').textContent.trim();
   const getHeadingFromCell = (e) => e.$('label').textContent.trim();
   function updateAndShowCustomOverlay() {
     if (pageState !== 3) return;
+    CustomOverlay.reset();
     const cells = $('.MuiGrid-root').children;
     const info = {};
     info['Transaction Date Time'] = getInfoFromCell(cells[1]);
@@ -331,10 +356,11 @@ mixin('link', async () => {
       if (img.src.startsWith('data:image')) {
         CustomOverlay.updateImage(imgPos, img.src);
       } else {
+        const currentImgPos = imgPos;
         observeMut(img, (l, o) => {
           for (const m of l) {
             if (m.target.src.startsWith('data:image')) {
-              CustomOverlay.updateImage(imgPos, m.target.src);
+              CustomOverlay.updateImage(currentImgPos, m.target.src);
               o.disconnect();
             }
           }
@@ -343,50 +369,58 @@ mixin('link', async () => {
       imgPos--;
       i--;
     }
-    i -= 4; // TODO: check if this value is correct
-    // ID
-    info[getHeadingFromCell(cells[i-8])] = getInfoFromCell(cells[i-8]);
+    i -= imgPos === 1 ? 3 : 4;
+    let idType, idCell;
     // Special case for corporate account
-    if (getInfoFromCell(cells[3]) === 'CORPORATE') {
-      info['Corporate Name'] = getInfoFromCell(cells[i-11]);
-      info['Customer Name'] = getInfoFromCell(cells[i-7]);
+    if (getInfoFromCell(cells[3]) === 'Corporate') {
+      info['Company Name'] = getInfoFromCell(cells[i-10]);
+      idCell = cells[i-7];
+      idType = getHeadingFromCell(idCell);
+      info[idType] = getInfoFromCell(idCell);
+      info['Customer Name'] = getInfoFromCell(cells[i-6]);
+      info['DOB'] = getInfoFromCell(cells[i-5]);
+      info['Nationality'] = getInfoFromCell(cells[i-4]);
     } else {
+      idCell = cells[i-8];
+      idType = getHeadingFromCell(idCell);
+      info[idType] = getInfoFromCell(idCell);
       info['Name'] = getInfoFromCell(cells[i-7]);
+      info['DOB'] = getInfoFromCell(cells[i-6]);
+      info['Nationality'] = getInfoFromCell(cells[i-5]);
+      info['Local Count'] = getInfoFromCell(cells[i-1]);
     }
-    info['DOB'] = getInfoFromCell(cells[i-6]);
-    info['Nationality'] = getInfoFromCell(cells[i-5]);
-    info['Local Count'] = getInfoFromCell(cells[i-1]);
     info['Retrieved from MyInfo'] = getInfoFromCell(cells[i]);
+    wpInfo = null;
+    if (idType.startsWith('WORKP')) {
+      wpInfo = { id: info[idType], name: info.Name, dob: info.DOB };
+    }
+    CustomOverlay.setElementLocations(cells[i+3].$('button'), idCell);
     CustomOverlay.updateInfo(info);
     CustomOverlay.show();
   }
 
-  let w;
+  let momWindow;
   async function copyWorkPassInfo() {
-    const info = {
-      id: getDataFromPage(14),
-      name: getDataFromPage(15),
-      dob: getDataFromPage(16)
-    }
-    await navigator.clipboard.writeText(JSON.stringify(info));
-    if (w && !w.closed) {
+    if (!wpInfo) return;
+    await navigator.clipboard.writeText(JSON.stringify(wpInfo));
+    if (momWindow && !momWindow.closed) {
       window.open('', 'mom-workpass-check');
     } else {
-      w = window.open('https://service2.mom.gov.sg/workpass/enquiry/search', 'mom-workpass-check');
+      momWindow = window.open('https://service2.mom.gov.sg/workpass/enquiry/search', 'mom-workpass-check');
     }
   }
 }, { runAsContentScript: true });
 
 mixin('link', `
-  .btn-upload, .custom-overlay {
+  .btn-upload, .btn-open-overlay, .custom-overlay {
     display: none;
   }
-  .btn-upload {
+  .btn-upload, .btn-open-overlay {
     position: fixed;
     right: 16px;
     bottom: 16px;
   }
-  .btn-upload.show {
+  .btn-upload.show, .btn-open-overlay.show {
     display: inline-flex;
   }
   .custom-overlay {
@@ -447,13 +481,13 @@ mixin('link', `
   }
   .info-row {
     position: relative;
-    margin: 10px 0;
+    margin: 8px 0;
   }
   .info-row>b {
     font-size: 14px;
   }
   .info-row>p {
-    margin: 2px 0;
+    margin: 1px 0;
     font-size: 18px;
     font-family: system-ui;
   }
