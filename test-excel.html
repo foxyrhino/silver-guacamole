@@ -1,0 +1,630 @@
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Excel Testing</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    .css-17kvgbn {
+      outline: 0;
+      border: 0;
+      padding: 8px 16px;
+      border-radius: 8px;
+      background-color: rgb(255, 158, 27);
+      color: white;
+      font-family: Roboto;
+      font-size: 16px;
+      font-weight: 500;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+      transition: box-shadow .2s;
+      cursor: pointer;
+    }
+    .css-17kvgbn:hover {
+      box-shadow: 0 10px 20px rgba(0,0,0,0.19), 0 6px 6px rgba(0,0,0,0.23);
+    }
+
+    body .btn-upload {
+      left: 16px;
+      right: unset;
+    }
+    .MuiGrid-root {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+    }
+  </style>
+  <style>
+    .btn-upload, .btn-open-overlay, .custom-overlay {
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s, visibility .2s;
+    }
+    .btn-upload, .btn-open-overlay {
+      display: inline-flex;
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+    }
+    .custom-overlay {
+      height: 100%;
+      position: fixed;
+      inset: 0;
+      padding: 16px;
+      background: rgba(0, 0, 0, .5);
+    }
+    .custom-overlay.show, .btn-upload.show, .btn-open-overlay.show {
+      visibility: visible;
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .custom-dialog {
+      position: relative;
+      display: flex;
+      height: 100%;
+      border-radius: 12px;
+      background: #EEE;
+      overflow: hidden;
+    }
+    .btn-back {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      margin: 0;
+    }
+    .btn-close {
+      all: unset;
+      position: absolute;
+      display: inline-block;
+      top: 0px;
+      right: 0px;
+      padding: 8px;
+      cursor: pointer;
+    }
+    .btn-close>svg {
+      height: 28px;
+      fill: rgba(0, 0, 0, .38);
+      transition: .2s fill;
+    }
+    .btn-close:hover>svg {
+      fill: rgba(0, 0, 0, .7);
+    }
+    .btn-approve {
+      background-color: #4CAF50;
+    }
+    .btn-reject {
+      background-color: #F44336;
+    }
+    .image-column {
+      flex: 2;
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: #BBB;
+      gap: 1px;
+    }
+    .image-column>.image-wrapper {
+      flex: 1;
+      background: #DDD;
+      overflow: hidden;
+      display: none;
+    }
+    /* This is big brain time */
+    .image-column>.image-wrapper:has(img[src^="data:image"]) {
+      display: block;
+    }
+    .image-wrapper>img {
+      height: 0;
+      min-height: 100%;
+      width: 100%;
+      object-fit: contain;
+      image-orientation: from-image;
+    }
+    .info-column {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 24px;
+    }
+    .info-row {
+      position: relative;
+      margin: 8px 0;
+    }
+    .info-row>b {
+      display: block;
+      font-size: 14px;
+    }
+    .info-row>input {
+      width: 200px;
+      margin: 1px 0;
+      padding: 0;
+      font-size: 18px;
+      font-family: system-ui;
+    }
+    .info-row>input[readonly] {
+      outline: 0;
+      border: 0;
+      background: transparent;
+    }
+    .info-row>.btn-wp-check {
+      position: absolute;
+      top: 6px;
+      left: 120px;
+      margin: 0;
+      padding: 0.5em 1em;
+    }
+    .dialog-footer {
+      display: flex;
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 76px;
+      padding: 16px;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .dialog-footer>button {
+      margin: 0;
+    }
+    .dialog-footer>button.btn-edit, .btn-back {
+      color: rgb(255, 158, 27);
+      background-color: #FFF;
+    }
+    .MuiSnackbar-root {
+      height: 112px;
+      background-color: transparent;
+      pointer-events: none;
+    }
+    .MuiSnackbar-root>.MuiPaper-root {
+      pointer-events: auto;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="MuiGrid-root"></div>
+  <script src="modules/idb-keyval.js"></script>
+  <script src="modules/read-excel-file.js"></script>
+  <script>
+
+    const $ = (q) => document.querySelector(q);
+    const $$ = (q) => document.querySelectorAll(q);
+    Object.defineProperty(HTMLElement.prototype, '$', { value: function (q) { return this.querySelector(q) } });
+    Object.defineProperty(HTMLElement.prototype, '$$', { value: function (q) { return this.querySelectorAll(q) } });
+    function createElem(q, t, a) {
+      const e = document.createElement(q);
+      if (t) e.append(document.createTextNode(t));
+      for (const [k, v] of Object.entries(a ?? 0)) e[k] = v;
+      return e;
+    }
+    function observeMut(q, fn, attrs = { childList: true }) {
+      const o = new MutationObserver(fn);
+      o.observe(typeof q === 'string' ? $(q) : q, attrs);
+    }
+    function observeMutOnce(q, fn, attrs = { childList: true }) {
+      const o = new MutationObserver((m, o) => { fn(m, o); o.disconnect(); });
+      o.observe(typeof q === 'string' ? $(q) : q, attrs);
+    }
+    // initialisation functions, do not copy
+    function goBackToPageOne() {}
+    $('.MuiGrid-root').innerHTML = Array.from({ length: 30 }, (_, i) => {
+      return `<div class="cell"><label>Heading ${i}</label><p>Text ${i}</p></div>`;
+    }).join('');
+    pageState = 3;
+    $('body').append(createElem('button', 'OPEN OVERLAY', { onclick: updateAndShowCustomOverlay }));
+
+    // All of data handling is in this class
+    class Database {
+      #hasData = true;
+      #stats;
+
+      // Get countryOrder, activeIndex and totalCount
+      async getStats() {
+        if (this.#stats) return this.#stats;
+        if (!this.#hasData) return null;
+        const v = await idbKeyval.getMany(['countryOrder', 'activeIndex', 'totalCount']);
+        if (v[0] == null) {
+          this.#hasData = false;
+          return null;
+        }
+        this.#stats = { countryOrder: v[0], activeIndex: v[1], totalCount: v[2] };
+        return this.#stats;
+      }
+
+      // Uploads excel rows into idb keyval store
+      async uploadData(rows) {
+        let headerSize = 0;
+        while (!(rows[headerSize][0] instanceof Date)) {
+          headerSize++;
+        }
+        rows.splice(0, headerSize);
+        const rowsToSet = Array(rows.length); // setMany will use this as its first param
+        const rowsToUpdate = []; // array of [index, updateFn];
+        const mobileMap = new Map(); // key: mobile number, value: idbkey
+        const idAndNameMap = new Map(); // key: ID+Name, value: idbkey
+        const countryOrder = Array(rows.length); // array of [country, index], ordered like this to make sort easier
+        for (let i = 0; i < rows.length; i++) {
+          const id = rows[i][7];
+          const val = {
+            date: rows[i][0], // TODO: ensure date is in correct time zone, or convert to string
+            mobile: rows[i][2],
+            id,
+            // additional fields:
+            // extraMobilesIndexes => Array of idb indexes of extra mobile numbers of the same customer
+            // extraIdsMap => Map of idb indexes (k) and extra IDs (v) of the customer, for the same mobile number
+            // duplicate => this field is set during runtime, after user has chosen which ID is the correct one
+            // verified => whether user has verified this number and customer
+            // edits => for example [1,1,0,0], with the order being name, id, dob and nationality
+            // rejectReason => a string for reason of rejection
+          };
+          if (rows[i][13] === 'YES') val.verified = true; // Auto verified if retrieved from myinfo
+          if (mobileMap.has(val.mobile)) {
+            const indexOfOriginal = mobileMap.get(val.mobile);
+            rowsToUpdate.push([indexOfOriginal, (v) => {
+              v.extraIdsMap ??= new Map();
+              v.extraIdsMap.set(i, id);
+              return v;
+            }]);
+          } else {
+            mobileMap.set(val.mobile, i);
+          }
+          const idAndName = `${id}+${rows[i][8]}`;
+          if (idAndNameMap.has(idAndName)) {
+            const indexOfOriginal = idAndNameMap.get(idAndName);
+            rowsToUpdate.push([indexOfOriginal, (v) => {
+              v.extraMobilesIndexes ??= [];
+              v.extraMobilesIndexes.push(i);
+              return v;
+            }]);
+          } else {
+            idAndNameMap.set(idAndName, i);
+          }
+          rowsToSet[i] = [i, val];
+          countryOrder[i] = [rows[i][10], i];
+          // idbKeyval.set(i, val);
+        }
+        await idbKeyval.setMany(rowsToSet);
+        const promises = rowsToUpdate.map((args) => idbKeyval.update(...args));
+        countryOrder.sort().forEach((e, i, arr) => arr[i] = e[1]);
+        promises.push(idbKeyval.setMany([['countryOrder', countryOrder], ['activeIndex', 0], ['totalCount', rows.length]]));
+        await Promise.all(promises);
+        this.#hasData = true;
+        this.#stats = { countryOrder, activeIndex: 0, totalCount: rows.length };
+        return true;
+      }
+
+      // Downloads existing data in idb into a text file, which can be copied and pasted into excel
+      // Only the last few columns are downloaded, those being edits, reject reasons and remarks
+      async downloadData() {
+        const { state } = await this.getNextEntry();
+        if (state === 'NO DATA') return;
+        if (state !== 'COMPLETED') alert('Not all rows have been checked! Unverified rows will be labelled UNVERIFIED in the Remarks column.');
+        const indexes = Array.from({ length: this.#stats.totalCount }, (_, i) => i);
+        const values = await idbKeyval.getMany(indexes);
+        let text = '';
+        for (const v of values) {
+          if (!v.verified) {
+            text += '\t'.repeat(6) + 'UNVERIFIED' + '\n';
+            continue;
+          }
+          let rowText = '';
+          rowText += v.edits ? v.edits.join('\t') + '\t' : '\t'.repeat(4);
+          rowText += v.rejectReason ? `YES\t${v.rejectReason}\t` : '\t\t';
+          if (v.duplicate) rowText += 'DUPLICATE';
+          rowText = rowText.trimEnd();
+          text += rowText + '\n';
+        }
+        text = text.trimEnd();
+        const a = createElem('a', null, {
+          download: 'data.txt',
+          href: URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+        });
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      // returns an object containing the next custumer entry and state: { index, value, state }
+      // state cound be either 'NO DATA' (when db is empty), or 'COMPLETED' (when all rows have been verified)
+      async getNextEntry() {
+        const stats = await this.getStats();
+        if (!stats) return { state: 'NO DATA' };
+        let i = stats.countryOrder[stats.activeIndex];
+        let v = await idbKeyval.get(i);
+        const activeIndexChanged = v.verified;
+        while (v.verified) {
+          if (stats.activeIndex >= stats.totalCount - 1) {
+            await idbKeyval.set('activeIndex', stats.activeIndex);
+            return { state: 'COMPLETED' };
+          }
+          i = stats.countryOrder[++stats.activeIndex];
+          v = await idbKeyval.get(i);
+        }
+        if (activeIndexChanged) idbKeyval.set('activeIndex', stats.activeIndex);
+        return { index: i, value: v, state: 'NORMAL' };
+      }
+
+      // Marks row with index i as verified, with params being edits, correctId or rejectReason
+      // This will also check if there are any linked rows with same mobiles or ids, and verify them accordingly
+      async markAsVerified(i, params = {}) {
+        const v = await idbKeyval.get(i);
+        if (v.verified) return;
+        if (v.extraIdsMap && params.correctId == null) throw new Error('Please provide a correct ID!');
+        const promises = [];
+        if (v.extraIdsMap) {
+          let correctIdFound = params.correctId === v.id;
+          for (const [i, id] of v.extraIdsMap) {
+            if (!correctIdFound && id === params.correctId) {
+              promises.push(this.markAsVerified(i, { ...params, doNotChangeActiveIndex: true }));
+              correctIdFound = true;
+            } else promises.push(this.markAsDuplicate(i));
+          }
+          if (params.correctId !== v.id) {
+            delete params.edits;
+            v.duplicate = true;
+          }
+        }
+        v.verified = true;
+        if (params.rejectReason && !v.duplicate) v.rejectReason = params.rejectReason;
+        if (params.edits) v.edits = params.edits;
+        delete params.edits;
+        promises.push(idbKeyval.update(i, (prev) => {
+          if (prev.verified) return prev;
+          return v;
+        }));
+        if (v.extraMobilesIndexes) for (const e of v.extraMobilesIndexes) promises.push(this.markAsVerified(e, { ...params, doNotChangeActiveIndex: true }));
+        await Promise.all(promises);
+        if (!params.doNotChangeActiveIndex) {
+          await idbKeyval.set('activeIndex', ++this.#stats.activeIndex);
+        }
+        return true;
+      }
+
+      // Marks row with index i as verified and duplicate
+      // This will also check if there are any linked rows with same mobiles
+      async markAsDuplicate(i) {
+        const v = await idbKeyval.get(i);
+        if (v.verified) return;
+        const promises = [idbKeyval.update(i, (v) => {
+          v.duplicate = true;
+          v.verified = true;
+          return v;
+        })];
+        if (v.extraMobilesIndexes) for (const e of v.extraMobilesIndexes) promises.push(this.markAsDuplicate(e));
+        await Promise.all(promises);
+        return true;
+      }
+    }
+    db = new Database();
+
+    class Cell {
+      constructor(cellElem, editable) {
+        this.cellElem = cellElem;
+        this.editable = editable;
+        this.heading = cellElem.$('label').textContent.trim();
+        this.text = cellElem.$('p').textContent.trim();
+      }
+    }
+
+    // build all new UI elements first and attach to DOM
+    let CustomOverlay, ShowCustomOverlayBn, UploadBn;
+    // construct upload button
+    (function () {
+      UploadBn = createElem('label', 'UPLOAD', { className: 'btn-upload css-17kvgbn' });
+      const Input = createElem('input', null, {
+        type: 'file',
+        accept: '.xlsx',
+        style: 'display:none',
+        onchange: async (e) => {
+          try {
+            if (await idbKeyval.get(0)) {
+              const result = confirm('This will delete any old data remaining. Proceed?');
+              if (!result) return;
+              await idbKeyval.clear();
+            }
+            if (!window.hasOwnProperty('readXlsxFile')) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
+            const rows = await readXlsxFile(e.target.files[0]);
+            await db.uploadData(rows);
+          } catch (e) { alert(e) };
+        },
+      });
+      UploadBn.append(Input);
+      Object.defineProperty(UploadBn, 'show', { value: function () { this.classList.add('show') } });
+      Object.defineProperty(UploadBn, 'hide', { value: function () { this.classList.remove('show') } });
+      $('body').append(UploadBn);
+    })();
+    // construct custom overlay and customOverlayBn
+    (function () {
+      let momWindow, actualEditBn, cellList;
+      async function copyWorkPassInfo() {
+        if (!cellList) return;
+        const wpInfo = {};
+        for (const cell of cellList) {
+          if (cell.heading === 'Name') wpInfo.name = cell.text;
+          else if (cell.heading.startsWith('WORKP')) wpInfo.id = cell.text;
+          else if (cell.heading === 'Date of Birth') wpInfo.dob = cell.text;
+        }
+        await navigator.clipboard.writeText(JSON.stringify(wpInfo));
+        if (momWindow && !momWindow.closed) {
+          window.open('', 'mom-workpass-check');
+        } else {
+          momWindow = window.open('https://service2.mom.gov.sg/workpass/enquiry/search', 'mom-workpass-check');
+        }
+      }
+      CustomOverlay = createElem('div', null, { className: 'custom-overlay' });
+      CustomOverlay.innerHTML = `
+        <div class="custom-dialog">
+          <div class="image-column">
+            <div class="image-wrapper"><img alt="" src="" draggable="false"></div>
+            <div class="image-wrapper"><img alt="" src="" draggable="false"></div>
+          </div>
+          <div class="info-column"></div>
+          <div class="dialog-footer">
+            <button class="btn-reject css-17kvgbn">REJECT</button>
+            <button class="btn-approve css-17kvgbn">APPROVE</button>
+          </div>
+          <button class="btn-close">
+            <svg viewBox="0 96 960 960">
+              <path d="M480 664 300 844q-18 18-44 18t-44-18q-18-18-18-44t18-44l180-180-180-180q-18-18-18-44t18-44q18-18 44-18t44 18l180 180 180-180q18-18 44-18t44 18q18 18 18 44t-18 44L568 576l180 180q18 18 18 44t-18 44q-18 18-44 18t-44-18L480 664Z"/>
+            </svg>
+          </button>
+        </div>
+      `;
+      // CustomOverlay.$('.btn-edit').onclick = () => {
+      //   CustomOverlay.hide();
+      //   window.scrollTo(0, actualIdCell ? actualIdCell.offsetTop : 500);
+      //   if (actualEditBn) actualEditBn.click();
+      // };
+      CustomOverlay.$('.btn-close').onclick = () => CustomOverlay.hide();
+      CustomOverlay.$$('.image-wrapper').forEach((elem) => {
+        let isMouseDown = false, isDragging = false;
+        let x = 0, y = 0, prevX = 0, prevY = 0;
+        let tX = 0, tY = 0, scale = 1, rotate = 0;
+        Object.defineProperty(elem, 'reset', {
+          value: function () {
+            tX = 0, tY = 0, scale = 1, rotate = 0;
+            this.firstElementChild.style = '';
+            this.firstElementChild.src = '';
+          }
+        });
+        elem.oncontextmenu = (e) => e.preventDefault();
+        elem.onmousemove = (e) => {
+          const rect = elem.getBoundingClientRect();
+          x = e.clientX - rect.left;
+          y = e.clientY - rect.top;
+          if (isMouseDown) {
+            isDragging = true;
+            tX += x - prevX;
+            tY += y - prevY;
+            elem.firstElementChild.style.translate = `${tX}px ${tY}px`;
+          }
+          prevX = x;
+          prevY = y;
+        };
+        elem.onmousewheel = (e) => {
+          e.preventDefault();
+          scale *= e.deltaY > 0 ? 0.8 : 1.25;
+          if (scale < 0.512) scale = 0.512;
+          elem.firstElementChild.style.scale = scale;
+        };
+        elem.onmousedown = (e) => { e.preventDefault(); isMouseDown = true; };
+        elem.onmouseup = (e) => {
+          isMouseDown = false;
+          if (isDragging) {
+            isDragging = false;
+            return;
+          }
+          if (e.which == 2) {
+            elem.reset();
+            return;
+          } else if (e.which == 1) {
+            rotate -= 1; if (rotate == -1) rotate = 3;
+          } else if (e.which == 3) {
+            rotate += 1; if (rotate == 4) rotate = 0;
+          }
+          elem.firstElementChild.style.rotate = `${rotate * 90}deg`;
+        };
+        elem.onmouseleave = (e) => { isDragging = false; isMouseDown = false; };
+      });
+      Object.defineProperty(CustomOverlay, 'reset', {
+        value: function () {
+          this.$('.info-column').innerHTML = '';
+          this.$$('.image-wrapper').forEach((i) => i.reset());
+          actualEditBn = null; cellList = null;
+        }
+      });
+      Object.defineProperty(CustomOverlay, 'updateImage', {
+        value: function (position, src) {
+          this.$$('.image-wrapper>img')[position].src = src;
+        }
+      });
+      Object.defineProperty(CustomOverlay, 'updateCells', {
+        value: function (cL, eB) {
+          cellList = cL;
+          actualEditBn = eB;
+          this.$('.info-column').innerHTML = cL.map((c) => {
+            return `<div class="info-row"><b>${c.heading}</b><input value="${c.text}" readonly>${
+              c.heading.startsWith('WORKP') ? '<button class="btn-wp-check css-17kvgbn">CHECK WORKPASS</button>' : ''
+            }</div>`;
+          }).join('');
+          const wpCheckBn = this.$('.info-column .btn-wp-check');
+          if (wpCheckBn) wpCheckBn.onclick = copyWorkPassInfo;
+        }
+      });
+      // Object.defineProperty(CustomOverlay, 'updateInfo', {
+      //   value: function (info) {
+      //     this.$('.info-column').innerHTML = Object.entries(info).map((x) => {
+      //       const row = `<div class="info-row"><b>${x[0]}</b><p>${x[1]}</p>${x[0].startsWith('WORKP') ? '<button class="btn-wp-check css-17kvgbn">CHECK WORKPASS</button>' : ''
+      //         }</div>`;
+      //       return row;
+      //     }).join('');
+      //     const checkWpBn = this.$('.info-column .btn-wp-check');
+      //     if (checkWpBn) checkWpBn.onclick = copyWorkPassInfo;
+      //   }
+      // });
+      Object.defineProperty(CustomOverlay, 'show', { value: function () { this.classList.add('show'); ShowCustomOverlayBn.hide(); } });
+      Object.defineProperty(CustomOverlay, 'hide', { value: function () { this.classList.remove('show'); ShowCustomOverlayBn.show(); } });
+      ShowCustomOverlayBn = createElem('button', 'OPEN OVERLAY', { className: 'btn-open-overlay css-17kvgbn', onclick: () => CustomOverlay.show() });
+      Object.defineProperty(ShowCustomOverlayBn, 'show', { value: function () { this.classList.add('show') } });
+      Object.defineProperty(ShowCustomOverlayBn, 'hide', { value: function () { this.classList.remove('show'); } });
+      $('body').append(CustomOverlay);
+      $('body').append(ShowCustomOverlayBn);
+    })();
+
+    $('body').addEventListener('keydown', (e) => {
+      if (e.altKey && e.key === 'a' && !e.repeat) {
+        console.log('alt+a shortcut');
+      }
+    })
+
+    ShowCustomOverlayBn.show();
+    UploadBn.show();
+
+    function updateAndShowCustomOverlay() {
+      if (pageState !== 3) return;
+      CustomOverlay.reset();
+      const cells = $('.MuiGrid-root').children;
+      // const info = {};
+      // info['Transaction Date Time'] = getInfoFromCell(cells[1]);
+      let i = cells.length - 1, imgPos = 1;
+      // get images
+      while (imgPos >= 0 && cells[i].$('img')) {
+        const img = cells[i].$('img');
+        if (img.src.startsWith('data:image')) {
+          CustomOverlay.updateImage(imgPos, img.src);
+        } else {
+          const currentImgPos = imgPos;
+          observeMut(img, (l, o) => {
+            for (const m of l) {
+              if (m.target.src.startsWith('data:image')) {
+                CustomOverlay.updateImage(currentImgPos, m.target.src);
+                o.disconnect();
+              }
+            }
+          }, { attributeFilter: ['src'] });
+        }
+        imgPos--;
+        i--;
+      }
+      i -= imgPos === 1 ? 3 : 4;
+      const cellIndexes = [1, i-8, i-7, i-6, i-5, i-1, i];
+      const cellEditable = [false, true, true, true, false, false];
+      const accountTypeCell = new Cell(cells[3], false);
+      // Special case for corporate account
+      if (accountTypeCell.text === 'Corporate') {
+        for (let a = 1; a < 5; a++) cellIndexes[a]++;
+        cellIndexes.splice(1, 0, i-10);
+        cellEditable.splice(1, 0, true);
+      }
+      const editBn = cells[i+3].$('button');
+      CustomOverlay.updateCells(cellIndexes.map((v, i) => new Cell(cells[v], cellEditable[i])), editBn);
+      CustomOverlay.show();
+    }
+  </script>
+</body>
+
+</html>

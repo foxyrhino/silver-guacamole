@@ -24,6 +24,190 @@ mixin('link', async () => {
     o.observe(typeof q === 'string' ? $(q) : q, attrs);
   }
 
+  // All of data handling is in this class
+  class Database {
+    #hasData = true;
+    #stats;
+
+    // Get countryOrder, activeIndex and totalCount
+    async getStats() {
+      if (this.#stats) return this.#stats;
+      if (!this.#hasData) return null;
+      const v = await idbKeyval.getMany(['countryOrder', 'activeIndex', 'totalCount']);
+      if (v[0] == null) {
+        this.#hasData = false;
+        return null;
+      }
+      this.#stats = { countryOrder: v[0], activeIndex: v[1], totalCount: v[2] };
+      return this.#stats;
+    }
+
+    // Uploads excel rows into idb keyval store
+    async uploadData(rows) {
+      let headerSize = 0;
+      while (!(rows[headerSize][0] instanceof Date)) {
+        headerSize++;
+      }
+      rows.splice(0, headerSize);
+      const rowsToSet = Array(rows.length); // setMany will use this as its first param
+      const rowsToUpdate = []; // array of [index, updateFn];
+      const mobileMap = new Map(); // key: mobile number, value: idbkey
+      const idAndNameMap = new Map(); // key: ID+Name, value: idbkey
+      const countryOrder = Array(rows.length); // array of [country, index], ordered like this to make sort easier
+      for (let i = 0; i < rows.length; i++) {
+        const id = rows[i][7];
+        const val = {
+          date: rows[i][0], // TODO: ensure date is in correct time zone, or convert to string
+          mobile: rows[i][2],
+          id,
+          // additional fields:
+          // extraMobilesIndexes => Array of idb indexes of extra mobile numbers of the same customer
+          // extraIdsMap => Map of idb indexes (k) and extra IDs (v) of the customer, for the same mobile number
+          // duplicate => this field is set during runtime, after user has chosen which ID is the correct one
+          // verified => whether user has verified this number and customer
+          // edits => for example [1,1,0,0], with the order being name, id, dob and nationality
+          // rejectReason => a string for reason of rejection
+        };
+        if (rows[i][13] === 'YES') val.verified = true; // Auto verified if retrieved from myinfo
+        if (mobileMap.has(val.mobile)) {
+          const indexOfOriginal = mobileMap.get(val.mobile);
+          rowsToUpdate.push([indexOfOriginal, (v) => {
+            v.extraIdsMap ??= new Map();
+            v.extraIdsMap.set(i, id);
+            return v;
+          }]);
+        } else {
+          mobileMap.set(val.mobile, i);
+        }
+        const idAndName = `${id}+${rows[i][8]}`;
+        if (idAndNameMap.has(idAndName)) {
+          const indexOfOriginal = idAndNameMap.get(idAndName);
+          rowsToUpdate.push([indexOfOriginal, (v) => {
+            v.extraMobilesIndexes ??= [];
+            v.extraMobilesIndexes.push(i);
+            return v;
+          }]);
+        } else {
+          idAndNameMap.set(idAndName, i);
+        }
+        rowsToSet[i] = [i, val];
+        countryOrder[i] = [rows[i][10], i];
+        // idbKeyval.set(i, val);
+      }
+      await idbKeyval.setMany(rowsToSet);
+      const promises = rowsToUpdate.map((args) => idbKeyval.update(...args));
+      countryOrder.sort().forEach((e, i, arr) => arr[i] = e[1]);
+      promises.push(idbKeyval.setMany([['countryOrder', countryOrder], ['activeIndex', 0], ['totalCount', rows.length]]));
+      await Promise.all(promises);
+      this.#hasData = true;
+      this.#stats = { countryOrder, activeIndex: 0, totalCount: rows.length };
+      return true;
+    }
+
+    // Downloads existing data in idb into a text file, which can be copied and pasted into excel
+    // Only the last few columns are downloaded, those being edits, reject reasons and remarks
+    async downloadData() {
+      const { state } = await this.getNextEntry();
+      if (state === 'NO DATA') return;
+      if (state !== 'COMPLETED') alert('Not all rows have been checked! Unverified rows will be labelled UNVERIFIED in the Remarks column.');
+      const indexes = Array.from({ length: this.#stats.totalCount }, (_, i) => i);
+      const values = await idbKeyval.getMany(indexes);
+      let text = '';
+      for (const v of values) {
+        if (!v.verified) {
+          text += '\t'.repeat(6) + 'UNVERIFIED' + '\n';
+          continue;
+        }
+        let rowText = '';
+        rowText += v.edits ? v.edits.join('\t') + '\t' : '\t'.repeat(4);
+        rowText += v.rejectReason ? `YES\t${v.rejectReason}\t` : '\t\t';
+        if (v.duplicate) rowText += 'DUPLICATE';
+        rowText = rowText.trimEnd();
+        text += rowText + '\n';
+      }
+      text = text.trimEnd();
+      const a = createElem('a', null, {
+        download: 'data.txt',
+        href: URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+      });
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    // returns an object containing the next custumer entry and state: { index, value, state }
+    // state cound be either 'NO DATA' (when db is empty), or 'COMPLETED' (when all rows have been verified)
+    async getNextEntry() {
+      const stats = await this.getStats();
+      if (!stats) return { state: 'NO DATA' };
+      let i = stats.countryOrder[stats.activeIndex];
+      let v = await idbKeyval.get(i);
+      const activeIndexChanged = v.verified;
+      while (v.verified) {
+        if (stats.activeIndex >= stats.totalCount - 1) {
+          await idbKeyval.set('activeIndex', stats.activeIndex);
+          return { state: 'COMPLETED' };
+        }
+        i = stats.countryOrder[++stats.activeIndex];
+        v = await idbKeyval.get(i);
+      }
+      if (activeIndexChanged) idbKeyval.set('activeIndex', stats.activeIndex);
+      return { index: i, value: v, state: 'NORMAL' };
+    }
+
+    // Marks row with index i as verified, with params being edits, correctId or rejectReason
+    // This will also check if there are any linked rows with same mobiles or ids, and verify them accordingly
+    async markAsVerified(i, params = {}) {
+      const v = await idbKeyval.get(i);
+      if (v.verified) return;
+      if (v.extraIdsMap && params.correctId == null) throw new Error('Please provide a correct ID!');
+      const promises = [];
+      if (v.extraIdsMap) {
+        let correctIdFound = params.correctId === v.id;
+        for (const [i, id] of v.extraIdsMap) {
+          if (!correctIdFound && id === params.correctId) {
+            promises.push(this.markAsVerified(i, { ...params, doNotChangeActiveIndex: true }));
+            correctIdFound = true;
+          } else promises.push(this.markAsDuplicate(i));
+        }
+        if (params.correctId !== v.id) {
+          delete params.edits;
+          v.duplicate = true;
+        }
+      }
+      v.verified = true;
+      if (params.rejectReason && !v.duplicate) v.rejectReason = params.rejectReason;
+      if (params.edits) v.edits = params.edits;
+      delete params.edits;
+      promises.push(idbKeyval.update(i, (prev) => {
+        if (prev.verified) return prev;
+        return v;
+      }));
+      if (v.extraMobilesIndexes) for (const e of v.extraMobilesIndexes) promises.push(this.markAsVerified(e, { ...params, doNotChangeActiveIndex: true }));
+      await Promise.all(promises);
+      if (!params.doNotChangeActiveIndex) {
+        await idbKeyval.set('activeIndex', ++this.#stats.activeIndex);
+      }
+      return true;
+    }
+
+    // Marks row with index i as verified and duplicate
+    // This will also check if there are any linked rows with same mobiles
+    async markAsDuplicate(i) {
+      const v = await idbKeyval.get(i);
+      if (v.verified) return;
+      const promises = [idbKeyval.update(i, (v) => {
+        v.duplicate = true;
+        v.verified = true;
+        return v;
+      })];
+      if (v.extraMobilesIndexes) for (const e of v.extraMobilesIndexes) promises.push(this.markAsDuplicate(e));
+      await Promise.all(promises);
+      return true;
+    }
+  }
+
+  const db = new Database();
+
   // build all new UI elements first and attach to DOM
   let CustomOverlay, ShowCustomOverlayBn, UploadBn;
   // construct custom overlay and customOverlayBn
@@ -135,112 +319,24 @@ mixin('link', async () => {
       type: 'file',
       accept: '.xlsx',
       style: 'display:none',
-      onchange: onUpload,
+      onchange: async (e) => {
+        try {
+          if (await idbKeyval.get(0)) {
+            const result = confirm('This will delete any old data remaining. Proceed?');
+            if (!result) return;
+            await idbKeyval.clear();
+          }
+          if (!window.hasOwnProperty('readXlsxFile')) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
+          const rows = await readXlsxFile(e.target.files[0]);
+          await db.uploadData(rows);
+        } catch (e) { alert(e) };
+      },
     });
     UploadBn.append(Input);
     Object.defineProperty(UploadBn, 'show', { value: function () { this.classList.add('show') } });
     Object.defineProperty(UploadBn, 'hide', { value: function () { this.classList.remove('show') } });
     $('body').append(UploadBn);
   })();
-
-  // handle reading of excel file and saving it in idb
-  async function onUpload(e) {
-    if (await idbKeyval.get(0)) {
-      const result = confirm('This will delete any old data remaining. Proceed?');
-      if (!result) return;
-      await idbKeyval.clear();
-    }
-    if (!window.hasOwnProperty('readXlsxFile')) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
-    const rows = await readXlsxFile(e.target.files[0]);
-    let headerSize = 0;
-    while (!(rows[headerSize][0] instanceof Date)) {
-      headerSize++;
-    }
-    const mobileMap = new Map(); // key: mobile number, value: idbkey
-    const idAndNameMap = new Map(); // key: ID+Name, value: idbkey
-    for (let i = headerSize; i < rows.length; i++) {
-      const key = i - headerSize;
-      const id = rows[i][7];
-      const val = {
-        date: rows[i][0],
-        mobile: rows[i][2],
-        id,
-        // additional fields:
-        // extraMobilesKeys => Array of idbkeys of extra mobile numbers of the same customer
-        // extraIdsMap => Map of idbkeys (k) and extra IDs (v) of the customer, for the same mobile number
-        // duplicate => this field is set during runtime, after user has chosen which ID is the correct one
-        // verified => whether user has verified this number and customer
-        // edits => for example [1,1,0,0], with the order being name, id, dob and nationality
-        // rejectReason => a string for reason of rejection
-      };
-      if (rows[i][13] === 'YES') val.verified = true; // Auto verified if retrieved from myinfo
-      if (mobileMap.has(val.mobile)) {
-        const keyOfOriginal = mobileMap.get(val.mobile);
-        idbKeyval.update(keyOfOriginal, (v) => {
-          v.extraIdsMap ??= new Map();
-          v.extraIdsMap.set(key, id);
-          return v;
-        });
-      } else {
-        mobileMap.set(val.mobile, key);
-      }
-      const idAndName = `${id}+${rows[i][8]}`;
-      if (idAndNameMap.has(idAndName)) {
-        const keyOfOriginal = idAndNameMap.get(idAndName);
-        idbKeyval.update(keyOfOriginal, (v) => {
-          v.extraMobilesKeys ??= [];
-          v.extraMobilesKeys.push(key);
-          return v;
-        });
-      } else {
-        idAndNameMap.set(idAndName, key);
-      }
-      idbKeyval.set(key, val);
-    }
-    // TODO: link this to webpage
-  }
-  async function markAsVerified(k, params = {}) {
-    k = +k;
-    const v = await idbKeyval.get(k);
-    if (v.verified) return;
-    if (v.extraIdsMap && params.correctId == null) throw new Error('Please provide a correct ID!');
-    const promises = [];
-    if (v.extraIdsMap) {
-      let correctIdFound = params.correctId === v.id;
-      for (const [k, id] of v.extraIdsMap) {
-        if (!correctIdFound && id === params.correctId) {
-          promises.push(markAsVerified(k, {...params}));
-          correctIdFound = true;
-        } else promises.push(markAsDuplicate(k));
-      }
-      if (params.correctId !== v.id) {
-        delete params.edits;
-        v.duplicate = true;
-      }
-    }
-    v.verified = true;
-    if (params.rejectReason && !v.duplicate) v.rejectReason = params.rejectReason;
-    if (params.edits) v.edits = params.edits;
-    delete params.edits;
-    promises.push(idbKeyval.update(k, (old) => {
-      if (old.verified) return old;
-      return v;
-    }));
-    if (v.extraMobilesKeys) for (const k of v.extraMobilesKeys) promises.push(markAsVerified(k, params));
-    await Promise.all(promises);
-  }
-  async function markAsDuplicate(k) {
-    k = +k;
-    const v = await idbKeyval.get(k);
-    if (v.verified) return;
-    const promises = [idbKeyval.update(k, (v) => {
-      v.duplicate = true;
-      v.verified = true;
-      return v;
-    })];
-    if (v.extraMobilesKeys) for (const k of v.extraMobilesKeys) promises.push(markAsDuplicate(k));
-    await Promise.all(promises);
-  }
 
   // get mobile number from clipboard automatically
   let currentMobile, clipboardMobile;
