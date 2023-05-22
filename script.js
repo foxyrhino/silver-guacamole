@@ -205,14 +205,62 @@ mixin('link', async () => {
       return true;
     }
   }
-
   const db = new Database();
+
+  class Cell {
+    constructor(cellElem, editable) {
+      this.cellElem = cellElem;
+      this.editable = editable;
+      this.heading = cellElem.$('label').textContent.trim();
+      this.text = cellElem.$('p').textContent.trim();
+    }
+  }
 
   // build all new UI elements first and attach to DOM
   let CustomOverlay, ShowCustomOverlayBn, UploadBn;
+  // construct upload button
+  (function () {
+    UploadBn = createElem('label', 'UPLOAD', { className: 'btn-upload css-17kvgbn' });
+    const Input = createElem('input', null, {
+      type: 'file',
+      accept: '.xlsx',
+      style: 'display:none',
+      onchange: async (e) => {
+        try {
+          if (await idbKeyval.get(0)) {
+            const result = confirm('This will delete any old data remaining. Proceed?');
+            if (!result) return;
+            await idbKeyval.clear();
+          }
+          if (!window.hasOwnProperty('readXlsxFile')) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
+          const rows = await readXlsxFile(e.target.files[0]);
+          await db.uploadData(rows);
+        } catch (e) { alert(e) };
+      },
+    });
+    UploadBn.append(Input);
+    Object.defineProperty(UploadBn, 'show', { value: function () { this.classList.add('show') } });
+    Object.defineProperty(UploadBn, 'hide', { value: function () { this.classList.remove('show') } });
+    $('body').append(UploadBn);
+  })();
   // construct custom overlay and customOverlayBn
   (function () {
-    let actualEditBn, actualIdCell;
+    let momWindow, actualEditBn, cellList;
+    async function copyWorkPassInfo() {
+      if (!cellList) return;
+      const wpInfo = {};
+      for (const cell of cellList) {
+        if (cell.heading === 'Name') wpInfo.name = cell.text;
+        else if (cell.heading.startsWith('WORKP')) wpInfo.id = cell.text;
+        else if (cell.heading === 'DOB') wpInfo.dob = cell.text;
+      }
+      await navigator.clipboard.writeText(JSON.stringify(wpInfo));
+      if (momWindow && !momWindow.closed) {
+        window.open('', 'mom-workpass-check');
+      } else {
+        momWindow = window.open('https://service2.mom.gov.sg/workpass/enquiry/search', 'mom-workpass-check');
+      }
+    }
     CustomOverlay = createElem('div', null, { className: 'custom-overlay' });
     CustomOverlay.innerHTML = `
       <div class="custom-dialog">
@@ -222,28 +270,41 @@ mixin('link', async () => {
         </div>
         <div class="info-column"></div>
         <div class="dialog-footer">
-          <button class="btn-edit css-17kvgbn">EDIT</button>
-          <button class="btn-close css-17kvgbn">CLOSE</button>
+          <button class="btn-edit css-17kvgbn"></button>
+          <button class="btn-secondary css-17kvgbn"></button>
+          <button class="btn-primary css-17kvgbn"></button>
         </div>
-        <button class="btn-back css-17kvgbn">BACK</button>
+        <button class="btn-close">
+          <svg viewBox="0 96 960 960">
+            <path d="M480 664 300 844q-18 18-44 18t-44-18q-18-18-18-44t18-44l180-180-180-180q-18-18-18-44t18-44q18-18 44-18t44 18l180 180 180-180q18-18 44-18t44 18q18 18 18 44t-18 44L568 576l180 180q18 18 18 44t-18 44q-18 18-44 18t-44-18L480 664Z"/>
+          </svg>
+        </button>
       </div>
     `;
-    CustomOverlay.$('.btn-back').onclick = goBackToPageOne;
-    CustomOverlay.$('.btn-edit').onclick = () => {
-      CustomOverlay.hide();
-      window.scrollTo(0, actualIdCell ? actualIdCell.offsetTop : 500);
-      if (actualEditBn) actualEditBn.click();
-    };
     CustomOverlay.$('.btn-close').onclick = () => CustomOverlay.hide();
+    CustomOverlay.$('.btn-edit').onclick = () => {
+      // CustomOverlay.startEdits();
+      CustomOverlay.hide();
+      window.scrollTo(0, cellList[1].cellElem.offsetTop);
+      actualEditBn.click();
+    }
+    CustomOverlay.$('.btn-primary').onclick = () => {
+      if (CustomOverlay.classList.contains('edit')) return CustomOverlay.finishEdits(true);
+    };
+    CustomOverlay.$('.btn-secondary').onclick = () => {
+      if (CustomOverlay.classList.contains('edit')) return CustomOverlay.finishEdits(false);
+    };
     CustomOverlay.$$('.image-wrapper').forEach((elem) => {
       let isMouseDown = false, isDragging = false;
       let x = 0, y = 0, prevX = 0, prevY = 0;
       let tX = 0, tY = 0, scale = 1, rotate = 0;
-      Object.defineProperty(elem, 'reset', {value: function () {
-        tX = 0, tY = 0, scale = 1, rotate = 0;
-        this.firstElementChild.style = '';
-        this.firstElementChild.src = '';
-      }});
+      Object.defineProperty(elem, 'reset', {
+        value: function (removeSrc = true) {
+          tX = 0, tY = 0, scale = 1, rotate = 0;
+          this.firstElementChild.style = '';
+          if (removeSrc) this.firstElementChild.src = '';
+        }
+      });
       elem.oncontextmenu = (e) => e.preventDefault();
       elem.onmousemove = (e) => {
         const rect = elem.getBoundingClientRect();
@@ -272,7 +333,7 @@ mixin('link', async () => {
           return;
         }
         if (e.which == 2) {
-          elem.reset();
+          elem.reset(false);
           return;
         } else if (e.which == 1) {
           rotate -= 1; if (rotate == -1) rotate = 3;
@@ -283,28 +344,59 @@ mixin('link', async () => {
       };
       elem.onmouseleave = (e) => { isDragging = false; isMouseDown = false; };
     });
-    Object.defineProperty(CustomOverlay, 'reset', {value: function () {
-      this.$('.info-column').innerHTML = '';
-      this.$$('.image-wrapper').forEach((i) => i.reset());
-      actualEditBn = null; actualIdCell = null;
-    }});
-    Object.defineProperty(CustomOverlay, 'setElementLocations', {value: function (edit, id) {
-      actualEditBn = edit; actualIdCell = id;
-    }});
-    Object.defineProperty(CustomOverlay, 'updateImage', {value: function (position, src) {
-      this.$$('.image-wrapper>img')[position].src = src;
-    }});
-    Object.defineProperty(CustomOverlay, 'updateInfo', {value: function (info) {
-      this.$('.info-column').innerHTML = Object.entries(info).map((x) => {
-        const row = `<div class="info-row"><b>${x[0]}</b><p>${x[1]}</p>${
-          x[0].startsWith('WORKP')?'<button class="btn-wp-check css-17kvgbn">CHECK WORKPASS</button>':''
-        }</div>`;
-        return row;
-      }).join('');
-      const checkWpBn = this.$('.info-column .btn-wp-check');
-      if (checkWpBn) checkWpBn.onclick = copyWorkPassInfo;
-    }});
-    Object.defineProperty(CustomOverlay, 'show', { value: function () { this.classList.add('show'); ShowCustomOverlayBn.hide(); }  });
+    Object.defineProperty(CustomOverlay, 'reset', {
+      value: function () {
+        this.classList.remove('edit');
+        this.$('.info-column').innerHTML = '';
+        this.$$('.image-wrapper').forEach((i) => i.reset());
+        actualEditBn = null; cellList = null;
+      }
+    });
+    const COUNTRIES = ["China","Malaysia","Philippines","Singapore","Afghanistan","Aland Islands","Albania","Algeria","American Samoa","Andorra","Angola","Anguilla","Antarctica","Antigua And Barbuda","Argentina","Armenia","Aruba","Australia","Austria","Azerbaijan","Bahamas","Bahrain","Bangladesh","Barbados","Belarus","Belgium","Belize","Benin","Bermuda","Bhutan","Bolivia","Bonaire, St. Eustatius, and Saba","Bosnia And Herzegowina","Botswana","Bouvet Island","Brazil","British Indian Ocean Territory","Brunei Darussalam","Bulgaria","Burkina Faso","Burundi","Cambodia","Cameroon","Canada","Cape Verde","Cayman Islands","Central African Republic","Chad","Chile","Christmas Island","Cocos (Keeling) Islands","Colombia","Comoros","Congo","Congo, The Democratic Republic Of The","Cook Islands","Costa Rica","Cote D'ivoire","Croatia (Local Name: Hrvatska)","Cuba","Curacao","Cyprus","Czech Republic","Denmark","Djibouti","Dominica","Dominican Republic","East Timor","Ecuador","Egypt","El Salvador","Equatorial Guinea","Eritrea","Estonia","Ethiopia","Falkland Islands (Malvinas)","Faroe Islands","Fiji","Finland","France","France, Metropolitan","French Guiana","French Polynesia","French Southern Territories","Gabon","Gambia","Georgia","Germany","Ghana","Gibraltar","Greece","Greenland","Grenada","Guadeloupe","Guam","Guatemala","Guernsey","Guinea","Guinea-bissau","Guyana","Haiti","Heard And Mc Donald Islands","Holy See (Vatican City State)","Honduras","Hong Kong","Hungary","Iceland","India","Indonesia","Iran (Islamic Republic Of)","Iraq","Ireland","Isle Of Man","Israel","Italy","Jamaica","Japan","Jersey","Jordan","Kazakhstan","Kenya","Kiribati","Korea, Democratic People's Republic Of","Korea, Republic Of","Kosovo","Kuwait","Kyrgyzstan","Lao People's Democratic Republic","Latvia","Lebanon","Lesotho","Liberia","Libyan Arab Jamahiriya","Liechtenstein","Lithuania","Luxembourg","Macau","Macedonia, The Former Yugoslav Republic Of","Madagascar","Malawi","Maldives","Mali","Malta","Marshall Islands","Martinique","Mauritania","Mauritius","Mayotte","Mexico","Micronesia, Federated States Of","Moldova, Republic Of","Monaco","Mongolia","Montenegro","Montserrat","Morocco","Mozambique","Myanmar","Namibia","Nauru","Nepal","Netherlands","Netherlands Antilles","New Caledonia","New Zealand","Nicaragua","Niger","Nigeria","Niue","Norfolk Island","Northern Mariana Islands","Norway","Oman","Pakistan","Palau","Palestinian Terrorities","Panama","Papua New Guinea","Paraguay","Peru","Pitcairn","Poland","Portugal","Puerto Rico","Qatar","Reunion","Romania","Romania (ROU)","Russian Federation","Rwanda","Saint Barthelemy","Saint Kitts And Nevis","Saint Lucia","Saint Martin","Saint Vincent And The Grenadines","Samoa","San Marino","Sao Tome And Principe","Saudi Arabia","Senegal","Serbia","Seychelles","Sierra Leone","Sint Maarten","Slovakia (Slovak Republic)","Slovenia","Solomon Islands","Somalia","South Africa","South Georgia And The South Sandwich Islands","South Sudan","Spain","Sri Lanka","St. Helena","St. Pierre And Miquelon","Sudan","Suriname","Svalbard And Jan Mayen Islands","Swaziland","Sweden","Switzerland","Syrian Arab Republic","Taiwan, Province Of China","Tajikistan","Tanzania, United Republic Of","Thailand","Timor-Leste","Togo","Tokelau","Tonga","Trinidad And Tobago","Tunisia","Turkey","Turkmenistan","Turks And Caicos Islands","Tuvalu","Uganda","Ukraine","United Arab Emirates","United Kingdom","United Nations","United States","United States Minor Outlying Islands","Uruguay","Uzbekistan","Vanuatu","Venezuela","Viet Nam","Virgin Islands (British)","Virgin Islands (U.S.)","Wallis And Futuna Islands","Western Sahara","Yemen","Yugoslavia","Zambia","Zimbabwe"];
+    const countryIsValid = (v) => COUNTRIES.includes(v);
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const dateIsValid = (d) => {
+      const [day, month, year] = d.split(' ');
+      if (+day < 1 || +day > 31 || !months.includes(month.toLowerCase()) || +year < 1900 || + year > new Date().getFullYear()) return false;
+      const monthDigit = months.indexOf(month.toLowerCase());
+      const date = new Date(Date.parse(d));
+      return +day === date.getDate() && monthDigit === date.getMonth() && +year === date.getFullYear();
+    }
+    Object.defineProperty(CustomOverlay, 'startEdits', {
+      value: function () {
+        this.classList.add('edit');
+        const infoRows = this.$('.info-column').children;
+        for (const i in cellList) {
+          if (cellList[i].editable) infoRows[i].$('p').setAttribute('contenteditable', '');
+        }
+      }
+    });
+    Object.defineProperty(CustomOverlay, 'finishEdits', {
+      value: function (saveChanges) {
+        this.classList.remove('edit');
+        if (!saveChanges) return this.updateCells(cellList, actualEditBn);
+        this.$$('.info-row>p').forEach((p) => p.removeAttribute('contenteditable'));
+      }
+    });
+    Object.defineProperty(CustomOverlay, 'updateImage', {
+      value: function (position, src) {
+        this.$$('.image-wrapper>img')[position].src = src;
+      }
+    });
+    Object.defineProperty(CustomOverlay, 'updateCells', {
+      value: function (cL, eB) {
+        cellList = cL;
+        actualEditBn = eB;
+        this.$('.info-column').innerHTML = cL.map((c) => {
+          return `<div class="info-row"><b>${c.heading}</b><p>${c.text}</p>${
+            c.heading.startsWith('WORKP') ? '<button class="btn-wp-check css-17kvgbn">CHECK WORKPASS</button>' : ''
+          }</div>`;
+        }).join('');
+        const wpCheckBn = this.$('.info-column .btn-wp-check');
+        if (wpCheckBn) wpCheckBn.onclick = copyWorkPassInfo;
+      }
+    });
+    Object.defineProperty(CustomOverlay, 'show', { value: function () { this.classList.add('show'); ShowCustomOverlayBn.hide(); } });
     Object.defineProperty(CustomOverlay, 'hide', { value: function () { this.classList.remove('show'); ShowCustomOverlayBn.show(); } });
     ShowCustomOverlayBn = createElem('button', 'OPEN OVERLAY', { className: 'btn-open-overlay css-17kvgbn', onclick: () => CustomOverlay.show() });
     Object.defineProperty(ShowCustomOverlayBn, 'show', { value: function () { this.classList.add('show') } });
@@ -312,31 +404,47 @@ mixin('link', async () => {
     $('body').append(CustomOverlay);
     $('body').append(ShowCustomOverlayBn);
   })();
-  // construct upload button
-  (function () {
-    UploadBn = createElem('label', 'UPLOAD', { className: 'btn-upload css-17kvgbn' });
-    const Input = createElem('input', null, {
-      type: 'file',
-      accept: '.xlsx',
-      style: 'display:none',
-      onchange: async (e) => {
-        try {
-          if (await idbKeyval.get(0)) {
-            const result = confirm('This will delete any old data remaining. Proceed?');
-            if (!result) return;
-            await idbKeyval.clear();
+
+  function updateAndShowCustomOverlay() {
+    if (pageState !== 3) return;
+    CustomOverlay.reset();
+    const cells = $('.MuiGrid-root').children;
+    // const info = {};
+    // info['Transaction Date Time'] = getInfoFromCell(cells[1]);
+    let i = cells.length - 1, imgPos = 1;
+    // get images
+    while (imgPos >= 0 && cells[i].$('img')) {
+      const img = cells[i].$('img');
+      if (img.src.startsWith('data:image')) {
+        CustomOverlay.updateImage(imgPos, img.src);
+      } else {
+        const currentImgPos = imgPos;
+        observeMut(img, (l, o) => {
+          for (const m of l) {
+            if (m.target.src.startsWith('data:image')) {
+              CustomOverlay.updateImage(currentImgPos, m.target.src);
+              o.disconnect();
+            }
           }
-          if (!window.hasOwnProperty('readXlsxFile')) await import(chrome.runtime.getURL('modules/read-excel-file.js'));
-          const rows = await readXlsxFile(e.target.files[0]);
-          await db.uploadData(rows);
-        } catch (e) { alert(e) };
-      },
-    });
-    UploadBn.append(Input);
-    Object.defineProperty(UploadBn, 'show', { value: function () { this.classList.add('show') } });
-    Object.defineProperty(UploadBn, 'hide', { value: function () { this.classList.remove('show') } });
-    $('body').append(UploadBn);
-  })();
+        }, { attributeFilter: ['src'] });
+      }
+      imgPos--;
+      i--;
+    }
+    i -= imgPos === 1 ? 3 : 4;
+    const cellIndexes = [1, i-8, i-7, i-6, i-5, i-1, i];
+    const cellEditable = [false, true, true, true, true, false, false];
+    const accountTypeCell = new Cell(cells[3], false);
+    // Special case for corporate account
+    if (accountTypeCell.text === 'Corporate') {
+      for (let a = 1; a < 5; a++) cellIndexes[a]++;
+      cellIndexes.splice(1, 0, i-10);
+      cellEditable.splice(1, 0, true);
+    }
+    const editBn = cells[i+3].$('button');
+    CustomOverlay.updateCells(cellIndexes.map((v, i) => new Cell(cells[v], cellEditable[i])), editBn);
+    CustomOverlay.show();
+  }
 
   // get mobile number from clipboard automatically
   let currentMobile, clipboardMobile;
@@ -434,90 +542,24 @@ mixin('link', async () => {
   window.addEventListener('keyup', (e) => {
     if (e.key === 'Escape' || e.key === '`') goBackToPageOne();
   });
-
-  let wpInfo;
-  // Retrieves information on page 3 for use in the custom overlay
-  const getInfoFromCell = (e) => e.$('p').textContent.trim();
-  const getHeadingFromCell = (e) => e.$('label').textContent.trim();
-  function updateAndShowCustomOverlay() {
-    if (pageState !== 3) return;
-    CustomOverlay.reset();
-    const cells = $('.MuiGrid-root').children;
-    const info = {};
-    info['Transaction Date Time'] = getInfoFromCell(cells[1]);
-    let i = cells.length - 1, imgPos = 1;
-    // get images
-    while (imgPos >= 0 && cells[i].$('img')) {
-      const img = cells[i].$('img');
-      if (img.src.startsWith('data:image')) {
-        CustomOverlay.updateImage(imgPos, img.src);
-      } else {
-        const currentImgPos = imgPos;
-        observeMut(img, (l, o) => {
-          for (const m of l) {
-            if (m.target.src.startsWith('data:image')) {
-              CustomOverlay.updateImage(currentImgPos, m.target.src);
-              o.disconnect();
-            }
-          }
-        }, { attributeFilter: ['src'] });
-      }
-      imgPos--;
-      i--;
-    }
-    i -= imgPos === 1 ? 3 : 4;
-    let idType, idCell;
-    // Special case for corporate account
-    if (getInfoFromCell(cells[3]) === 'Corporate') {
-      info['Company Name'] = getInfoFromCell(cells[i-10]);
-      idCell = cells[i-7];
-      idType = getHeadingFromCell(idCell);
-      info[idType] = getInfoFromCell(idCell);
-      info['Customer Name'] = getInfoFromCell(cells[i-6]);
-      info['DOB'] = getInfoFromCell(cells[i-5]);
-      info['Nationality'] = getInfoFromCell(cells[i-4]);
-    } else {
-      idCell = cells[i-8];
-      idType = getHeadingFromCell(idCell);
-      info[idType] = getInfoFromCell(idCell);
-      info['Name'] = getInfoFromCell(cells[i-7]);
-      info['DOB'] = getInfoFromCell(cells[i-6]);
-      info['Nationality'] = getInfoFromCell(cells[i-5]);
-      info['Local Count'] = getInfoFromCell(cells[i-1]);
-    }
-    info['Retrieved from MyInfo'] = getInfoFromCell(cells[i]);
-    wpInfo = null;
-    if (idType.startsWith('WORKP')) {
-      wpInfo = { id: info[idType], name: info.Name, dob: info.DOB };
-    }
-    CustomOverlay.setElementLocations(cells[i+3].$('button'), idCell);
-    CustomOverlay.updateInfo(info);
-    CustomOverlay.show();
-  }
-
-  let momWindow;
-  async function copyWorkPassInfo() {
-    if (!wpInfo) return;
-    await navigator.clipboard.writeText(JSON.stringify(wpInfo));
-    if (momWindow && !momWindow.closed) {
-      window.open('', 'mom-workpass-check');
-    } else {
-      momWindow = window.open('https://service2.mom.gov.sg/workpass/enquiry/search', 'mom-workpass-check');
-    }
-  }
 }, { runAsContentScript: true });
 
 mixin('link', `
   .btn-upload, .btn-open-overlay, .custom-overlay {
-    display: none;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity .1s, visibility .1s;
   }
   .btn-upload, .btn-open-overlay {
+    display: inline-flex;
     position: fixed;
     right: 16px;
-    bottom: 16px;
+    top: 18px;
   }
-  .btn-upload.show, .btn-open-overlay.show {
-    display: inline-flex;
+  .btn-open-overlay {
+    top: auto;
+    bottom: 16px;
   }
   .custom-overlay {
     height: 100%;
@@ -525,9 +567,12 @@ mixin('link', `
     inset: 0;
     padding: 16px;
     background: rgba(0, 0, 0, .5);
+    z-index: 100;
   }
-  .custom-overlay.show {
-    display: block;
+  .custom-overlay.show, .btn-upload.show, .btn-open-overlay.show {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
   }
   .custom-dialog {
     position: relative;
@@ -536,12 +581,28 @@ mixin('link', `
     border-radius: 12px;
     background: #EEE;
     overflow: hidden;
+    transform: scale(.99);
+    transition: transform .1s;
   }
-  .btn-back {
+  .custom-overlay.show .custom-dialog {
+    transform: none;
+  }
+  .btn-close {
+    all: unset;
     position: absolute;
-    top: 16px;
-    left: 16px;
-    margin: 0;
+    display: inline-block;
+    top: 0px;
+    right: 0px;
+    padding: 8px;
+    cursor: pointer;
+  }
+  .btn-close>svg {
+    height: 28px;
+    fill: rgba(0, 0, 0, .38);
+    transition: .2s fill;
+  }
+  .btn-close:hover>svg {
+    fill: rgba(0, 0, 0, .7);
   }
   .image-column {
     flex: 2;
@@ -580,12 +641,22 @@ mixin('link', `
     margin: 8px 0;
   }
   .info-row>b {
+    display: block;
     font-size: 14px;
   }
   .info-row>p {
+    width: 100%;
     margin: 1px 0;
+    padding: 0;
     font-size: 18px;
     font-family: system-ui;
+  }
+  .info-row>p[contenteditable] {
+    border: 2px solid rgba(0,0,0,.12);
+    border-radius: 4px;
+    margin: 0 -4px;
+    padding: 2px 4px;
+    background: white;
   }
   .info-row>.btn-wp-check {
     position: absolute;
@@ -593,6 +664,9 @@ mixin('link', `
     left: 120px;
     margin: 0;
     padding: 0.5em 1em;
+  }
+  .edit .info-row>.btn-wp-check {
+    display: none;
   }
   .dialog-footer {
     display: flex;
@@ -607,17 +681,48 @@ mixin('link', `
   }
   .dialog-footer>button {
     margin: 0;
+    transition: box-shadow .2s;
   }
-  .dialog-footer>button.btn-edit, .custom-dialog>.btn-back {
-    color: rgb(255, 158, 27);
+  .dialog-footer .btn-primary {
+    background-color: #4CAF50;
+  }
+  .dialog-footer .btn-primary::after {
+    content: 'APPROVE';
+  }
+  .dialog-footer .btn-secondary {
+    background-color: #F44336;
+  }
+  .dialog-footer .btn-secondary::after {
+    content: 'REJECT';
+  }
+  .dialog-footer .btn-edit {
+    background-color: rgb(255, 158, 27);
+  }
+  .dialog-footer .btn-edit::after {
+    content: 'EDIT';
+  }
+  .edit .btn-edit {
+    display: none;
+  }
+  .edit .dialog-footer .btn-primary {
+    background-color: rgb(255, 158, 27);
+  }
+  .edit .dialog-footer .btn-primary::after {
+    content: 'SAVE';
+  }
+  .edit .dialog-footer .btn-secondary {
     background-color: #FFF;
+    color: rgb(255, 158, 27);
+  }
+  .edit .dialog-footer .btn-secondary::after {
+    content: 'CANCEL';
   }
   .MuiSnackbar-root {
     height: 112px;
     background-color: transparent;
     pointer-events: none;
   }
-  .MuiSnackbar-root > .MuiPaper-root {
+  .MuiSnackbar-root>.MuiPaper-root {
     pointer-events: auto;
   }
 `);
